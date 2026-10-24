@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from app import models, timeutil
-from app.adapters import ollama_client
+from app.adapters import gemma_client
 from app.schemas.clinical import CallJobDraft, CallJobExtraction
 from app.services import call_orchestrator, clinical, scheduler
 
@@ -90,7 +90,7 @@ def test_local_draft_time_fallback(client, seeded, extract):
 
 
 def test_model_error_is_503(client, db, seeded, extract):
-    extract["result"] = ollama_client.ModelUnavailable("connection refused")
+    extract["result"] = gemma_client.ModelUnavailable("connection refused")
     r = client.post("/agent/jobs", json={"doctor_id": seeded["doctor_id"], "text": TEXT})
     assert r.status_code == 503
     assert r.json() == {"detail": "model unavailable"}

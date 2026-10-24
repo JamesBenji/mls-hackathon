@@ -2,8 +2,8 @@
 
 public_router:    GET /health          liveness only {"status": "ok"}; no data,
                                        no auth (load balancers, uptime checks)
-protected_router: GET /health/models   per-model status via
-                                       ollama_client.probe_models() plus the
+protected_router: GET /health/models   configured-model status via
+                                       gemma_client.probe_models() plus the
                                        telephony / scheduler mode. X-API-Key
                                        is applied in main.py.
 """
@@ -13,7 +13,7 @@ import logging
 
 from fastapi import APIRouter
 
-from app.adapters import elevenlabs, ollama_client, twilio_sms
+from app.adapters import elevenlabs, gemma_client, twilio_sms
 from app.config import settings
 from app.services import scheduler
 
@@ -30,7 +30,7 @@ def health() -> dict:
 
 @protected_router.get("/health/models")
 async def health_models() -> dict:
-    report = dict(await ollama_client.probe_models())
+    report = dict(await gemma_client.probe_models())
     report["telephony_mock"] = _telephony_mock()
     report["sms_mock"] = _sms_mock()
     report["scheduler_running"] = _scheduler_running()

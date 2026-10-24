@@ -1,4 +1,4 @@
-"""Deterministic red-flag scan, independent of any LLM (MEDGEMMA_DO_SETUP.md §6.4).
+"""Deterministic red-flag scan, independent of any LLM.
 
 Any hit sets a MINIMUM urgency of "urgent" that the LLM cannot lower.
 Patterns/thresholds are placeholders to be confirmed by a clinician;

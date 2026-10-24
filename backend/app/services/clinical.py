@@ -1,5 +1,5 @@
-"""Clinical service: the seam between the channel layer and the models
-(MEDGEMMA_DO_SETUP.md §6). Pure functions over channel-neutral inputs
+"""Clinical service: the seam between the channel layer and the model
+(Gemma 4 via the cloud API). Pure functions over channel-neutral inputs
 (app/schemas/context.py) -> validated Pydantic outputs
 (app/schemas/clinical.py). No ORM / DB access in here; the orchestrator
 persists results.
@@ -14,7 +14,7 @@ CONTRACT (implemented by the clinical task):
     async build_question_plan(patient: PatientContext,
                               last_reports: list[ReportSummary],
                               doctor_questions: list[str]) -> QuestionPlan
-        GEMMA4_MODEL chat_json, temperature 0, asyncio.wait_for(PLAN_TIMEOUT_S).
+        GEMMA_MODEL chat_json, temperature 0, asyncio.wait_for(PLAN_TIMEOUT_S).
         Keeps ALL doctor questions, <= 3 history follow-ups, always a
         red-flag probe, side-effect probe iff a new prescription exists else
         improvement question, no diagnostic statements. Deterministic
@@ -30,8 +30,8 @@ CONTRACT (implemented by the clinical task):
 
     async generate_report_detailed(transcript, patient, last_reports) -> GeneratedReport
     async generate_report(transcript, patient, last_reports) -> CallReportDraft
-        two_stage: MEDGEMMA free-text analysis -> GEMMA4 chat_json draft.
-        single: one GEMMA4 pass. Records only values the patient actually
+        two_stage: Gemma free-text analysis -> Gemma chat_json draft.
+        single: one Gemma pass. Records only values the patient actually
         stated; unverifiable numbers are nulled and listed in missing_items.
         Raises ModelError if no draft can be produced (orchestrator marks the
         report partial and keeps the transcript).
@@ -53,7 +53,7 @@ CONTRACT (implemented by the clinical task):
         explicitly in the prompt, never the model's idea of the date.
 
     async compare_images(prior_b64: str, new_b64: str, context: str) -> str
-        Phase 2 stub: MEDGEMMA with images_b64. No route/UI.
+        Phase 2 stub: Gemma vision with images_b64. No route/UI.
 
 Extra public helpers (pure, deterministic, safe to reuse):
     render_patient_context(patient, last_reports, *, now=None) -> str
@@ -63,7 +63,7 @@ Extra public helpers (pure, deterministic, safe to reuse):
     parse_scheduled_at(value) -> str | None
 
 Implementation notes:
-- Every model call goes through app.adapters.ollama_client by module
+- Every model call goes through app.adapters.gemma_client by module
   attribute (tests monkeypatch chat/chat_json) and reads model names and
   timeouts from settings at call time.
 - The model never has the final word: the plan post-check, the extraction
@@ -86,7 +86,7 @@ from datetime import datetime, timedelta
 from pydantic import ValidationError
 
 from app import timeutil
-from app.adapters import ollama_client
+from app.adapters import gemma_client
 from app.config import settings
 from app.schemas import clinical as schemas
 from app.schemas.clinical import (
@@ -320,20 +320,20 @@ def _messages(system: str, user: str) -> list[dict]:
 
 
 def _as_model_error(exc: BaseException, what: str) -> Exception:
-    if isinstance(exc, ollama_client.ModelError):
+    if isinstance(exc, gemma_client.ModelError):
         return exc
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
-        return ollama_client.ModelUnavailable(f"{what}: timed out")
+        return gemma_client.ModelUnavailable(f"{what}: timed out")
     if isinstance(exc, ValidationError):
-        return ollama_client.ModelOutputInvalid(f"{what}: output failed validation")
-    return ollama_client.ModelError(f"{what}: {type(exc).__name__}: {exc}")
+        return gemma_client.ModelOutputInvalid(f"{what}: output failed validation")
+    return gemma_client.ModelError(f"{what}: {type(exc).__name__}: {exc}")
 
 
 async def _chat_json(schema_model, messages: list[dict], what: str, timeout: float):
-    """GEMMA4 structured call; every failure surfaces as a ModelError."""
+    """Gemma structured call; every failure surfaces as a ModelError."""
     try:
-        out = await ollama_client.chat_json(settings.gemma4_model, messages, schema_model,
-                                            temperature=0, timeout=timeout)
+        out = await gemma_client.chat_json(settings.gemma_model, messages, schema_model,
+                                           temperature=0, timeout=timeout)
         return out if isinstance(out, schema_model) else schema_model.model_validate(out)
     except Exception as exc:
         err = _as_model_error(exc, what)
@@ -623,8 +623,8 @@ async def build_question_plan(patient: PatientContext, last_reports: list[Report
     try:
         messages = _plan_messages(patient, last_reports or [], questions, _local_now())
         plan = await asyncio.wait_for(
-            ollama_client.chat_json(settings.gemma4_model, messages, QuestionPlan,
-                                    temperature=0, timeout=budget),
+            gemma_client.chat_json(settings.gemma_model, messages, QuestionPlan,
+                                   temperature=0, timeout=budget),
             timeout=budget,
         )
         if not isinstance(plan, QuestionPlan):
@@ -869,29 +869,29 @@ async def generate_report_detailed(transcript: str, patient: PatientContext,
 
     analysis: str | None = None
     if pipeline == "two_stage":
-        medgemma = settings.medgemma_model
+        model = settings.gemma_model
         try:
-            text = await ollama_client.chat(
-                medgemma, _messages(REPORT_ANALYSIS_SYSTEM_PROMPT, header + transcript_block),
+            text = await gemma_client.chat(
+                model, _messages(REPORT_ANALYSIS_SYSTEM_PROMPT, header + transcript_block),
                 temperature=0.2, timeout=settings.model_timeout_s)
             analysis = (text or "").strip() or None
             if analysis:
-                models.append(medgemma)
+                models.append(model)
             else:
-                notes.append(f"stage 1 ({medgemma}) returned no text; continued as single pass")
+                notes.append(f"stage 1 ({model}) returned no text; continued as single pass")
         except Exception as exc:  # noqa: BLE001 - stage 1 is optional
             log.warning("report stage 1 (%s) failed: %s; continuing single pass",
-                        medgemma, type(exc).__name__)
-            notes.append(f"stage 1 ({medgemma}) failed: {type(exc).__name__}; "
+                        model, type(exc).__name__)
+            notes.append(f"stage 1 ({model}) failed: {type(exc).__name__}; "
                          "continued as single pass")
 
-    analysis_block = ("CLINICAL ANALYSIS (stage 1, from a medical model; it may contain mistakes, "
+    analysis_block = ("CLINICAL ANALYSIS (stage 1, from the model; it may contain mistakes, "
                       f"the transcript is the source of truth)\n{analysis}\n\n") if analysis else ""
     draft = await _chat_json(
         CallReportDraft,
         _messages(REPORT_DRAFT_SYSTEM_PROMPT, header + analysis_block + transcript_block),
         "report draft", settings.model_timeout_s)
-    models.append(settings.gemma4_model)
+    models.append(settings.gemma_model)
 
     draft, guard_notes = finalize_report_draft(draft, transcript)
     notes += guard_notes
@@ -1142,17 +1142,17 @@ async def extract_call_job(text: str, doctors_patients: list[dict], *,
 # --- Phase 2 stub -------------------------------------------------------------------
 
 async def compare_images(prior_b64: str, new_b64: str, context: str) -> str:
-    """Phase 2 stub (MEDGEMMA_DO_SETUP.md §6.6): recovery comparison between two
-    uploads (X-ray / wound photo) with MEDGEMMA vision via images_b64.
-    Doctor-facing draft text only. No route and no UI are built for it yet.
+    """Phase 2 stub: recovery comparison between two uploads (X-ray / wound
+    photo) with Gemma vision via images_b64. Doctor-facing draft text only.
+    No route and no UI are built for it yet.
     Raises ModelError if the model is unavailable."""
     user = (f"Clinical context: {context or 'none given'}\n"
             "Image 1 is the earlier upload, image 2 is the new upload. Compare them.")
     try:
-        return await ollama_client.chat(settings.medgemma_model,
-                                        _messages(IMAGE_COMPARE_SYSTEM_PROMPT, user),
-                                        temperature=0.2, timeout=settings.model_timeout_s,
-                                        images_b64=[prior_b64, new_b64])
+        return await gemma_client.chat(settings.gemma_model,
+                                       _messages(IMAGE_COMPARE_SYSTEM_PROMPT, user),
+                                       temperature=0.2, timeout=settings.model_timeout_s,
+                                       images_b64=[prior_b64, new_b64])
     except Exception as exc:
         err = _as_model_error(exc, "image comparison")
         if err is exc:

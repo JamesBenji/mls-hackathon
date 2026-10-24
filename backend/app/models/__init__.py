@@ -1,6 +1,5 @@
-"""SQLAlchemy models. Mirrors the data model in SCOPE.md, plus the columns
-the telephony + clinical tasks need (see ELEVENLABS_TWILIO_SETUP.md §3 and
-MEDGEMMA_DO_SETUP.md §6).
+"""SQLAlchemy models. Mirrors the data model in plan.md, plus the columns
+the telephony + clinical tasks need.
 
 Channel-agnostic core: `call_sessions` carry direction + channel so the
 same tables serve phone, SMS, and future web/app channels.

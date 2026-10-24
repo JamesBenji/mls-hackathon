@@ -6,7 +6,7 @@ GET  /agent/jobs              list (?doctor_id=, ?status=pending|scheduled|done)
 GET  /agent/jobs/{id}         one job
 POST /agent/jobs/{id}/start   place the job's call now
 
-Extraction is clinical.extract_call_job (Gemma 4, MEDGEMMA_DO_SETUP.md §6.5).
+Extraction is clinical.extract_call_job (Gemma 4 via the cloud API).
 The patient is only ever resolved among the requesting doctor's own
 patients; an ambiguous or unknown reference returns a question instead of a
 guess. Times are resolved against the current Europe/Berlin time passed in
@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models, timeutil
-from app.adapters import ollama_client
+from app.adapters import gemma_client
 from app.database import get_db
 from app.schemas.clinical import CallJobExtraction
 from app.services import call_orchestrator, clinical, scheduler
@@ -98,7 +98,7 @@ async def create_job(body: AgentJobIn, db: Session = Depends(get_db)) -> dict:
     try:
         extraction = await clinical.extract_call_job(body.text, patients,
                                                      now=timeutil.now_local())
-    except ollama_client.ModelError as exc:
+    except gemma_client.ModelError as exc:
         log.warning("agent job extraction failed: %s", type(exc).__name__)
         raise HTTPException(status_code=503, detail="model unavailable") from exc
 

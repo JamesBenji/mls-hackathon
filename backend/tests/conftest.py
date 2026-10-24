@@ -15,14 +15,12 @@ os.environ.update({
     "TWILIO_AUTH_TOKEN": "test-twilio-token",
     "PUBLIC_BASE_URL": "https://guardian.test",
     "CALLBACK_DEFAULT_MINUTES": "15",
-    "OLLAMA_URL": "http://ollama.test",
-    "MEDGEMMA_MODEL": "medgemma:4b",
-    "GEMMA4_MODEL": "gemma4:12b",
+    "GOOGLE_API_KEY": "test-api-key",
+    "GEMMA_MODEL": "gemma-4-31b-it",
     "CLINICAL_PIPELINE": "two_stage",
     "PLAN_TIMEOUT_S": "8",
     "MODEL_TIMEOUT_S": "120",
-    "OLLAMA_NUM_CTX": "16384",
-    "OLLAMA_NUM_PARALLEL": "2",
+    "MODEL_MAX_CONCURRENT": "2",
     "TIMEZONE": "Europe/Berlin",
     # Blank every real credential so a developer's backend/.env can never
     # leak into tests (env vars take precedence over the .env file).
@@ -33,7 +31,8 @@ os.environ.update({
     "TWILIO_API_KEY_SID": "",
     "TWILIO_API_KEY_SECRET": "",
     "TWILIO_NUMBER": "",
-    "EMAIL_API_KEY": "",
+    "GMAIL_ADDRESS": "",
+    "GMAIL_APP_PASSWORD": "",
 })
 
 from datetime import date, timedelta  # noqa: E402
@@ -43,7 +42,7 @@ import pytest  # noqa: E402
 from app import models  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.timeutil import utcnow  # noqa: E402
-from tests.fakes import FakeOllama  # noqa: E402
+from tests.fakes import FakeGemma  # noqa: E402
 
 WEBHOOK_SECRET = "test-webhook-secret"
 TOOL_TOKEN = "test-tool-token"
@@ -61,9 +60,9 @@ def _schema():
 @pytest.fixture(autouse=True)
 def _reset_singletons():
     yield
-    from app.adapters import elevenlabs, ollama_client
+    from app.adapters import elevenlabs, gemma_client
     from app.services import scheduler
-    for fn in (lambda: ollama_client.set_transport(None),
+    for fn in (lambda: gemma_client.set_transport(None),
                lambda: elevenlabs.set_transport(None),
                scheduler.reset_scheduler):
         try:
@@ -91,12 +90,12 @@ def client():
 
 
 @pytest.fixture
-def fake_ollama():
-    from app.adapters import ollama_client
-    fake = FakeOllama()
-    ollama_client.set_transport(fake.transport())
+def fake_gemma():
+    from app.adapters import gemma_client
+    fake = FakeGemma()
+    gemma_client.set_transport(fake.transport())
     yield fake
-    ollama_client.set_transport(None)
+    gemma_client.set_transport(None)
 
 
 @pytest.fixture

@@ -58,7 +58,7 @@ def test_protected_routes_need_api_key(client, api_key, requests_):
         assert r.status_code == 200, (path, r.text)
 
 
-def test_health_models_needs_api_key(client, api_key, fake_ollama):
+def test_health_models_needs_api_key(client, api_key, fake_gemma):
     assert client.get("/health/models").status_code == 401
     assert client.get("/health/models", headers={"X-API-Key": "nope"}).status_code == 401
     assert client.get("/health/models", headers={"X-API-Key": KEY}).status_code == 200
@@ -86,22 +86,22 @@ def test_inbound_sms_judged_by_twilio_signature_not_api_key(client, api_key, see
     assert r.headers["content-type"].startswith("application/xml")
 
 
-def test_health_models_report(client, fake_ollama):
+def test_health_models_report(client, fake_gemma):
     r = client.get("/health/models")
     assert r.status_code == 200
     body = r.json()
-    assert body["ollama"] == "up"
-    by_name = {m["name"]: m for m in body["models"]}
-    assert by_name["medgemma:4b"]["present"] and by_name["medgemma:4b"]["loaded"]
-    assert by_name["gemma4:12b"]["present"]
+    assert body["gemma"] == "up"
+    assert body["model"] == "gemma-4-31b-it"
+    assert body["present"] is True
+    assert isinstance(body["latency_ms"], float)
     assert body["telephony_mock"] is True  # MOCK_TELEPHONY=true in tests
     assert body["sms_mock"] is True
     assert body["scheduler_running"] is False  # SCHEDULER_ENABLED=false in tests
 
 
-def test_health_models_when_ollama_down(client, fake_ollama):
+def test_health_models_when_gemma_down(client, fake_gemma):
     import httpx
-    fake_ollama.fail = httpx.ConnectError("down")
+    fake_gemma.fail = httpx.ConnectError("down")
     body = client.get("/health/models").json()
-    assert body["ollama"] == "down"
-    assert all(m["error"] for m in body["models"])
+    assert body["gemma"] == "down"
+    assert body["error"]

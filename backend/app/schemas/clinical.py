@@ -1,6 +1,6 @@
-"""Validated model I/O for the clinical service (MEDGEMMA_DO_SETUP.md §6.1).
+"""Validated model I/O for the clinical service.
 
-These classes double as the JSON Schemas passed to Ollama's `format` field
+These classes double as the JSON Schemas stated in the model prompt
 (`Model.model_json_schema()`), so keep them flat and simple.
 """
 from __future__ import annotations

@@ -1,8 +1,8 @@
 """Application configuration loaded from environment / .env.
 
-Env var names follow ELEVENLABS_TWILIO_SETUP.md and MEDGEMMA_DO_SETUP.md.
-A few legacy names from the first scaffold (ELEVENLABS_API_KEY,
-MEDGEMMA_URL, ...) are still accepted as aliases so existing .env files
+Env var names are documented in .env.example (the source of truth for
+placeholders). A few legacy names from the first scaffold (ELEVENLABS_API_KEY,
+TWILIO_FROM_NUMBER, ...) are still accepted as aliases so existing .env files
 keep working.
 """
 from __future__ import annotations
@@ -48,18 +48,21 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
-    # --- Model server (Ollama on the droplet) ------------------------------
-    ollama_url: str = Field(
-        "http://127.0.0.1:11434", validation_alias=_env("OLLAMA_URL", "MEDGEMMA_URL")
+    # --- Model server (Gemma 4 on the Google Generative Language API) ------
+    gemma_api_key: str | None = Field(
+        None, validation_alias=_env("GOOGLE_API_KEY", "GEMMA_API_KEY")
     )
-    medgemma_model: str = "medgemma:4b"
-    gemma4_model: str = "gemma4:12b"
+    gemma_model: str = "gemma-4-31b-it"
+    gemma_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     clinical_pipeline: str = "two_stage"  # two_stage | single
     model_timeout_s: float = 120.0
     plan_timeout_s: float = 8.0  # live-call path budget
-    ollama_num_ctx: int = 16384
-    ollama_num_parallel: int = 2  # max concurrent generations (semaphore)
+    model_max_concurrent: int = 2  # max concurrent generations (semaphore)
     history_reports_n: int = 3  # last N call reports fed to the model
+
+    @property
+    def gemma_configured(self) -> bool:
+        return bool(self.gemma_api_key)
 
     # --- Red-flag thresholds (placeholders, to be confirmed by a clinician) -
     redflag_bp_systolic_above: float = 180.0
