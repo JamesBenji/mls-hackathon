@@ -298,6 +298,13 @@ class _PlanEditorState extends State<PlanEditor> {
                     ),
                   if (_busy) const FProgress(),
                   const SizedBox(height: 16),
+                  if (_busy)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 16),
+                      child: Text(
+                        'Gemma is interpreting your instructions. This can take up to four minutes. Keep this window open; no call is being placed.',
+                      ),
+                    ),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: WorkspaceButton(

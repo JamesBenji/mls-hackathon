@@ -147,13 +147,31 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
 
   Future<void> _action(String action) async {
     if (_locked || _selected == null) return;
+    final approvedPlan = _selected!;
+    setState(() {
+      _busy = true;
+      _confirming = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      await _performAction(action, approvedPlan);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _confirming = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _performAction(String action, FollowUpPlan approvedPlan) async {
     String? destination;
     if (['call', 'activate', 'finish'].contains(action)) {
-      setState(() {
-        _busy = true;
-        _confirming = true;
-      });
-      final p = _selected!;
+      final p = approvedPlan;
       if (action == 'call') {
         try {
           final patients = await widget.api.patients();
@@ -161,14 +179,7 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
               .firstWhere((patient) => patient.id == p.patientId)
               .phone;
         } catch (e) {
-          if (mounted) {
-            setState(() {
-              _busy = false;
-              _confirming = false;
-              _error = 'Cannot confirm the destination number. $e';
-            });
-          }
-          return;
+          throw PlanApiException('Cannot confirm the destination number. $e');
         }
         if (!mounted) return;
       }
@@ -191,64 +202,51 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
             : 'Approve and call once',
       );
       if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _confirming = false;
-      });
+      setState(() => _confirming = false);
       if (confirmed != true) return;
     }
+    setState(() => _confirming = false);
+    final id = approvedPlan.id;
+    final random = Random.secure();
+    final dispatch = await widget.api.action(
+      id,
+      action,
+      body: action == 'call'
+          ? {
+              'approved': true,
+              'revision': approvedPlan.data['revision'],
+              'expected_phone': destination,
+              'request_key': List.generate(
+                24,
+                (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+              ).join(),
+            }
+          : null,
+    );
+    final plan = await widget.api.plan(id);
+    if (!mounted) return;
     setState(() {
-      _busy = true;
-      _error = null;
-      _notice = null;
+      _selected = plan;
+      _tab = plan.status == 'finished'
+          ? 'Finished'
+          : plan.needsReview
+          ? 'Needs review'
+          : 'Active';
+      // Do not claim a call was dispatched when the offline implementation did nothing.
+      if (action != 'call') {
+        _notice = 'Plan updated.';
+      } else if (widget.sample) {
+        _notice = null;
+      } else if (dispatch?['mock'] == true) {
+        _notice = 'Simulated call only. No phone call was placed.';
+      } else if (dispatch?['status'] == 'in_progress') {
+        _notice = 'Call initiated. Refresh for results.';
+      } else {
+        _notice =
+            'Call status: ${dispatch?['status'] ?? 'unconfirmed'}. Refresh history before retrying.';
+      }
     });
-    try {
-      final id = _selected!.id;
-      final random = Random.secure();
-      final dispatch = await widget.api.action(
-        id,
-        action,
-        body: action == 'call'
-            ? {
-                'approved': true,
-                'revision': _selected!.data['revision'],
-                'expected_phone': destination,
-                'request_key': List.generate(
-                  24,
-                  (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
-                ).join(),
-              }
-            : null,
-      );
-      final plan = await widget.api.plan(id);
-      if (!mounted) return;
-      setState(() {
-        _selected = plan;
-        _tab = plan.status == 'finished'
-            ? 'Finished'
-            : plan.needsReview
-            ? 'Needs review'
-            : 'Active';
-        // Do not claim a call was dispatched when the offline implementation did nothing.
-        if (action != 'call') {
-          _notice = 'Plan updated.';
-        } else if (widget.sample) {
-          _notice = null;
-        } else if (dispatch?['mock'] == true) {
-          _notice = 'Simulated call only. No phone call was placed.';
-        } else if (dispatch?['status'] == 'in_progress') {
-          _notice = 'Call initiated. Refresh for results.';
-        } else {
-          _notice =
-              'Call status: ${dispatch?['status'] ?? 'unconfirmed'}. Refresh history before retrying.';
-        }
-      });
-      await _load();
-    } catch (e) {
-      if (mounted) setState(() => _error = '$e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    await _load();
   }
 
   Future<void> _edit({bool create = false}) async {
@@ -568,7 +566,7 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
           child: Text('Select a plan to review instructions and results.'),
         )
       : PlanDetail(
-          key: ValueKey(_selected!.data),
+          key: ValueKey(_selected!.id),
           api: widget.api,
           plan: _selected!,
           busy: _locked,

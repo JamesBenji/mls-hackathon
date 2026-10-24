@@ -31,9 +31,69 @@ class HttpPlanApi implements PlanApi {
     required this.client,
     required String baseUrl,
     required this.apiKey,
-  }) : base = Uri.parse(baseUrl.endsWith('/') ? baseUrl : '$baseUrl/');
+  }) : base = _serverBase(baseUrl);
 
-  Future<dynamic> request(String method, String path, [PlanJson? body]) async {
+  static Uri _serverBase(String address) {
+    var uri = Uri.parse(address.trim());
+    if (uri.host == 'medicall.nulkode.dev') {
+      uri = uri.replace(scheme: 'https');
+    }
+    if (!uri.path.endsWith('/')) {
+      uri = uri.replace(path: '${uri.path}/');
+    }
+    return uri;
+  }
+
+  Future<http.Response> _send(http.Request request) async {
+    var current = request;
+    for (var redirects = 0; redirects <= 3; redirects++) {
+      current.followRedirects = false;
+      final streamed = await client.send(current);
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode != 307 && response.statusCode != 308) {
+        return response;
+      }
+
+      final location = response.headers['location'];
+      if (location == null || redirects == 3) {
+        throw const PlanApiException(
+          'The server returned an invalid redirect. No automatic retry was made.',
+        );
+      }
+      var destination = current.url.resolve(location);
+      // Reverse proxies can generate an HTTP Location for an HTTPS request.
+      // Keep transport encrypted rather than following that downgrade.
+      if (current.url.scheme == 'https' && destination.scheme == 'http') {
+        destination = destination.replace(scheme: 'https');
+      }
+      final currentPath = current.url.path.replaceFirst(RegExp(r'/+$'), '');
+      final destinationPath = destination.path.replaceFirst(RegExp(r'/+$'), '');
+      if (destination.origin != current.url.origin ||
+          destinationPath != currentPath ||
+          destination.query != current.url.query ||
+          destination == current.url) {
+        throw PlanApiException(
+          'Server redirect blocked for ${request.method} '
+          '${request.url.origin}${request.url.path} → '
+          '${destination.origin}${destination.path}. '
+          'No call retry was made. Reconnect using the canonical HTTPS server address.',
+        );
+      }
+
+      final redirected = http.Request(current.method, destination);
+      redirected.headers.addAll(current.headers);
+      redirected.bodyBytes = current.bodyBytes;
+      current = redirected;
+    }
+    throw const PlanApiException('Too many server redirects.');
+  }
+
+  Future<dynamic> request(
+    String method,
+    String path, [
+    PlanJson? body,
+    Duration timeout = const Duration(seconds: 90),
+  ]) async {
     try {
       final req = http.Request(method, base.resolve(path));
       req.headers.addAll({'Accept': 'application/json', 'X-API-Key': apiKey});
@@ -41,9 +101,7 @@ class HttpPlanApi implements PlanApi {
         req.headers['Content-Type'] = 'application/json';
         req.body = jsonEncode(body);
       }
-      final res = await (() async => http.Response.fromStream(
-        await client.send(req),
-      ))().timeout(const Duration(seconds: 90));
+      final res = await _send(req).timeout(timeout);
       if (res.statusCode < 200 || res.statusCode >= 300) {
         String detail = '';
         try {
@@ -51,7 +109,10 @@ class HttpPlanApi implements PlanApi {
         } catch (_) {
           /* Non-JSON proxy response. */
         }
-        throw PlanApiException('Request failed (${res.statusCode}). $detail');
+        throw PlanApiException(
+          'Request failed (${res.statusCode}) for $method '
+          '${req.url.origin}${req.url.path}. $detail',
+        );
       }
       return res.body.isEmpty ? null : jsonDecode(res.body);
     } on TimeoutException {
@@ -136,13 +197,18 @@ class HttpPlanApi implements PlanApi {
             'doctor_id': doctorId,
             'patient_id': patientId,
             'instructions': instructions,
-          })
+          }, const Duration(seconds: 270))
           as Map,
     ),
   );
   @override
   Future<void> edit(int id, PlanJson changes) async {
-    await request('PATCH', 'follow-up-plans/$id', changes);
+    await request(
+      'PATCH',
+      'follow-up-plans/$id',
+      changes,
+      const Duration(seconds: 270),
+    );
   }
 
   @override
