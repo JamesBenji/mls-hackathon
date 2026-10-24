@@ -8,6 +8,11 @@ const apiBase = String.fromEnvironment(
   defaultValue: 'http://localhost:8000',
 );
 
+const apiKey = String.fromEnvironment(
+  'API_KEY',
+  defaultValue: '',
+);
+
 abstract interface class DashboardApi {
   Future<List<Patient>> patients();
   Future<Patient> patient(int id);
@@ -17,6 +22,8 @@ abstract interface class DashboardApi {
   Future<void> addVital(int id, Json vital);
   Future<List<String>> questionPlan(int id);
   Future<Json> analyze(int id, String transcript);
+  Future<Json> startCall(int patientId);
+  Future<Json> scheduleCall(int patientId, String scheduledAt, {String? notes});
 }
 
 class ApiException implements Exception {
@@ -46,6 +53,9 @@ class HttpDashboardApi implements DashboardApi {
     try {
       final request = http.Request(method, base.resolve(path));
       request.headers['Accept'] = 'application/json';
+      if (apiKey.isNotEmpty) {
+        request.headers['X-API-Key'] = apiKey;
+      }
       if (body != null) {
         request.headers['Content-Type'] = 'application/json';
         request.body = jsonEncode(body);
@@ -159,5 +169,19 @@ class HttpDashboardApi implements DashboardApi {
           ...Map<String, dynamic>.from(analysis['triage'] as Map),
       };
     },
+  );
+  @override
+  Future<Json> startCall(int patientId) => _parse(
+    _request('POST', 'calls/start', body: {'patient_id': patientId}),
+    (json) => json as Json,
+  );
+  @override
+  Future<Json> scheduleCall(int patientId, String scheduledAt, {String? notes}) => _parse(
+    _request('POST', 'calls/schedule', body: {
+      'patient_id': patientId,
+      'scheduled_at': scheduledAt,
+      if (notes != null) 'notes': notes,
+    }),
+    (json) => json as Json,
   );
 }

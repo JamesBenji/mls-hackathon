@@ -1,4 +1,4 @@
 import 'package:flutter/widgets.dart';
-import 'medicall_app.dart';
+import 'app.dart';
 
-void main() => runApp(const MedicallApp());
+void main() => runApp(const GuardianApp());

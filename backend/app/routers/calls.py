@@ -27,6 +27,12 @@ class StartCallIn(BaseModel):
     call_job_id: int | None = None
 
 
+class ScheduleCallIn(BaseModel):
+    patient_id: int
+    scheduled_at: str  # ISO 8601 datetime
+    notes: str | None = None
+
+
 class CallbackIn(BaseModel):
     minutes: int | float | str | None = None
     missing_item: str | None = None
@@ -93,6 +99,37 @@ def session_detail(db: Session, session_id: int) -> dict[str, Any]:
             "uncertain_because": list(d.uncertain_because or []),
             "doctor_reviewed": bool(d.doctor_reviewed), "created_at": d.created_at,
         } for d in triage],
+    }
+
+
+@router.post("/schedule")
+async def schedule_call(body: ScheduleCallIn, db: Session = Depends(get_db)) -> dict:
+    """Schedule a check-in call for a future date/time."""
+    from datetime import datetime as dt
+    patient = db.get(models.Patient, body.patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="patient not found")
+    try:
+        scheduled = dt.fromisoformat(body.scheduled_at)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid datetime format")
+    doctor = db.get(models.Doctor, patient.doctor_id)
+    job = models.CallJob(
+        doctor_id=patient.doctor_id, patient_id=patient.id, source="typed",
+        raw_text=body.notes or f"Scheduled check-in for {patient.name}",
+        situation=body.notes or "Routine check-in",
+        treatment="", questions=[],
+        scheduled_at=scheduled, status="pending",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return {
+        "status": "scheduled",
+        "job_id": job.id,
+        "patient_name": patient.name,
+        "scheduled_at": scheduled.isoformat(),
+        "doctor": doctor.name if doctor else None,
     }
 
 
