@@ -9,9 +9,9 @@
 	<key>CFBundleDisplayName</key>
 	<string>Medicall</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Take a photo to preview your response to a care request.</string>
+	<string>Take a photo to send securely to your care team.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Choose a photo to preview your response to a care request.</string>
+	<string>Choose a photo to send securely to your care team.</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

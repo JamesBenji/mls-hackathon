@@ -1,14 +1,13 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:medicall/data/photo_requests.dart';
 import 'package:medicall/notifications/push_notification_service.dart';
 
 void main() {
-  test('Console notification opens the demo fixture', () {
+  test('Notifications without request IDs never invent a request', () {
     const message = RemoteMessage(
       notification: RemoteNotification(title: 'Test'),
     );
-    expect(requestIdFromMessage(message), demoPhotoRequest.id);
+    expect(requestIdFromMessage(message), isNull);
   });
 
   test('Backend request ID is preserved, never replaced by the demo ID', () {
