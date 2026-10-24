@@ -1,0 +1,28 @@
+# Secrets & env — never commit real values
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node / Flutter tooling
+node_modules/
+.dart_tool/
+build/
+*.iml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local artifacts
+*.pdf
+*.sqlite
+*.db
