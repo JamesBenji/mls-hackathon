@@ -1,122 +1,134 @@
-"""Clinical service interface — the seam between telephony and the brain.
+"""Clinical service: the seam between the channel layer and the models
+(MEDGEMMA_DO_SETUP.md §6). Pure functions over channel-neutral inputs
+(app/schemas/context.py) -> validated Pydantic outputs
+(app/schemas/clinical.py). No ORM / DB access in here; the orchestrator
+persists results.
 
-Colleague B's telephony layer (ElevenLabs/Twilio) calls these functions;
-they wrap the MedGemma reasoning in app/agent.py. Keeping this interface
-stable means the telephony code never imports MedGemma details directly.
+Everything produced here is a DRAFT for the doctor. Nothing in this module
+is ever spoken to the patient.
 
-Signatures match the stubs named in ELEVENLABS_TWILIO_SETUP.md section 3
-(services/clinical.py: build_question_plan(), generate_report(), triage()).
+CONTRACT (implemented by the clinical task):
+
+    DEFAULT_REDFLAG_PROBE: str
+
+    async build_question_plan(patient: PatientContext,
+                              last_reports: list[ReportSummary],
+                              doctor_questions: list[str]) -> QuestionPlan
+        GEMMA4_MODEL chat_json, temperature 0, asyncio.wait_for(PLAN_TIMEOUT_S).
+        Keeps ALL doctor questions, <= 3 history follow-ups, always a
+        red-flag probe, side-effect probe iff a new prescription exists else
+        improvement question, no diagnostic statements. Deterministic
+        post-check enforces those rules on the model output.
+        Timeout / ModelError / invalid output -> fallback_plan(doctor_questions)
+        + log warning. NEVER raises.
+
+    fallback_plan(doctor_questions: list[str]) -> QuestionPlan
+        The doctor's static questions, in order (source="doctor").
+
+    render_plan_for_agent(plan: QuestionPlan) -> str
+        Numbered text for the ElevenLabs `question_plan` dynamic variable.
+
+    async generate_report_detailed(transcript, patient, last_reports) -> GeneratedReport
+    async generate_report(transcript, patient, last_reports) -> CallReportDraft
+        two_stage: MEDGEMMA free-text analysis -> GEMMA4 chat_json draft.
+        single: one GEMMA4 pass. Records only values the patient actually
+        stated; unverifiable numbers are nulled and listed in missing_items.
+        Raises ModelError if no draft can be produced (orchestrator marks the
+        report partial and keeps the transcript).
+
+    async triage_detailed(report: CallReportDraft | None, transcript, patient) -> TriageOutcome
+    async triage(report, transcript, patient) -> TriageResult
+        Stage 1 redflags.scan (min urgency "urgent"); stage 2 LLM chat_json;
+        final urgency = max(rules, llm). Model failure -> rules-only result
+        (at least "monitor", with uncertain_because). NEVER raises.
+
+    propose_risk_level(patient, report, triage_result) -> str | None
+        Suggested patients.risk_level (stored as a proposal, never applied).
+
+    async extract_call_job(text: str, doctors_patients: list[dict], *,
+                           now: datetime | None = None) -> CallJobExtraction
+        doctors_patients = [{"id": int, "name": str}, ...] (that doctor's only).
+        Fuzzy-match patient_ref; ambiguous/unknown -> clarification question.
+        Relative times resolved against `now` (aware, Europe/Berlin) passed
+        explicitly in the prompt, never the model's idea of the date.
+
+    async compare_images(prior_b64: str, new_b64: str, context: str) -> str
+        Phase 2 stub: MEDGEMMA with images_b64. No route/UI.
 """
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from dataclasses import dataclass, field
+from datetime import datetime
 
-from app import agent, models
+from app.schemas.clinical import (
+    CallJobExtraction,
+    CallReportDraft,
+    QuestionPlan,
+    TriageResult,
+)
+from app.schemas.context import PatientContext, ReportSummary
 
-
-def _patient_dict(db: Session, patient: models.Patient) -> dict:
-    meds = db.scalars(
-        select(models.Medication).where(models.Medication.patient_id == patient.id)
-    ).all()
-    return {
-        "name": patient.name,
-        "category": patient.category,
-        "risk_level": patient.risk_level,
-        "chronic_conditions": patient.chronic_conditions,
-        "medications": [{"name": m.name, "dose": m.dose} for m in meds],
-    }
+DEFAULT_REDFLAG_PROBE = (
+    "Are you having any chest pain, trouble breathing, or severe dizziness right now?"
+)
 
 
-def _recent_reports(db: Session, patient_id: int, limit: int = 3) -> list[dict]:
-    reports = db.scalars(
-        select(models.CallReport)
-        .where(models.CallReport.patient_id == patient_id)
-        .order_by(models.CallReport.created_at.desc())
-    ).all()
-    return [{"summary": r.summary} for r in reports[:limit]]
+@dataclass
+class GeneratedReport:
+    draft: CallReportDraft
+    clinical_analysis: str | None = None  # stage-1 MedGemma text (two_stage)
+    model_info: dict = field(default_factory=dict)  # {"pipeline":..., "models": [...], "notes": [...]}
 
 
-async def build_question_plan(db: Session, patient_id: int) -> list[str]:
-    """Pre-call: doctor's questions + history-aware follow-ups (MedGemma)."""
-    patient = db.get(models.Patient, patient_id)
-    if not patient:
-        raise ValueError(f"patient {patient_id} not found")
-
-    template = db.scalars(
-        select(models.QuestionTemplate).where(
-            models.QuestionTemplate.patient_id == patient_id
-        )
-    ).first()
-    doctor_questions = template.questions if template else [
-        "How are you feeling overall today?",
-    ]
-    reports = _recent_reports(db, patient_id)
-    return await agent.build_question_plan(
-        _patient_dict(db, patient), doctor_questions, reports
-    )
+@dataclass
+class TriageOutcome:
+    result: TriageResult
+    rule_hits: list[str] = field(default_factory=list)  # "category: matched"
+    llm_urgency: str | None = None  # None if the model was unavailable
 
 
-async def analyze(db: Session, patient_id: int, transcript: str) -> dict:
-    """Post-call: run MedGemma over the transcript -> structured analysis.
-
-    Returns the raw analysis dict (summary, soap_note, structured_data,
-    risk_flags, urgency, recommended_action, escalate). Persistence is the
-    caller's job via generate_report()/triage() below, or persist_analysis().
-    """
-    patient = db.get(models.Patient, patient_id)
-    if not patient:
-        raise ValueError(f"patient {patient_id} not found")
-    reports = _recent_reports(db, patient_id)
-    return await agent.analyze_call(_patient_dict(db, patient), transcript, reports)
+async def build_question_plan(patient: PatientContext, last_reports: list[ReportSummary],
+                              doctor_questions: list[str]) -> QuestionPlan:
+    raise NotImplementedError
 
 
-def persist_analysis(
-    db: Session, call_session_id: int, patient_id: int, transcript: str,
-    analysis: dict,
-) -> dict:
-    """Write transcript + report + triage, and auto-update vitals.
+def fallback_plan(doctor_questions: list[str]) -> QuestionPlan:
+    raise NotImplementedError
 
-    Returns {"report_id", "triage_id"}. Idempotency/dedupe is the telephony
-    layer's responsibility (keyed on conversation_id) per the setup spec.
-    """
-    db.add(models.Transcription(
-        patient_id=patient_id, source="call", text=transcript
-    ))
-    report = models.CallReport(
-        call_session_id=call_session_id, patient_id=patient_id,
-        summary=analysis.get("summary"), soap_note=analysis.get("soap_note"),
-        structured_data=analysis.get("structured_data"),
-        risk_flags=analysis.get("risk_flags") or [],
-        escalated=bool(analysis.get("escalate")),
-    )
-    db.add(report)
 
-    triage = models.TriageDecision(
-        call_session_id=call_session_id, patient_id=patient_id,
-        urgency=analysis.get("urgency", "none"),
-        recommended_action=analysis.get("recommended_action", "none"),
-        rationale=analysis.get("rationale"),
-    )
-    db.add(triage)
+def render_plan_for_agent(plan: QuestionPlan) -> str:
+    raise NotImplementedError
 
-    sd = analysis.get("structured_data") or {}
-    for vtype, key, unit in [
-        ("bp_systolic", "bp_systolic", "mmHg"),
-        ("bp_diastolic", "bp_diastolic", "mmHg"),
-        ("blood_sugar", "blood_sugar", "mg/dL"),
-        ("weight", "weight_kg", "kg"),
-    ]:
-        if sd.get(key) is not None:
-            try:
-                db.add(models.Vital(
-                    patient_id=patient_id, type=vtype, value=float(sd[key]),
-                    unit=unit, source="call",
-                ))
-            except (TypeError, ValueError):
-                pass
 
-    db.commit()
-    db.refresh(report)
-    db.refresh(triage)
-    return {"report_id": report.id, "triage_id": triage.id}
+async def generate_report_detailed(transcript: str, patient: PatientContext,
+                                   last_reports: list[ReportSummary]) -> GeneratedReport:
+    raise NotImplementedError
+
+
+async def generate_report(transcript: str, patient: PatientContext,
+                          last_reports: list[ReportSummary]) -> CallReportDraft:
+    return (await generate_report_detailed(transcript, patient, last_reports)).draft
+
+
+async def triage_detailed(report: CallReportDraft | None, transcript: str,
+                          patient: PatientContext) -> TriageOutcome:
+    raise NotImplementedError
+
+
+async def triage(report: CallReportDraft | None, transcript: str,
+                 patient: PatientContext) -> TriageResult:
+    return (await triage_detailed(report, transcript, patient)).result
+
+
+def propose_risk_level(patient: PatientContext, report: CallReportDraft | None,
+                       triage_result: TriageResult) -> str | None:
+    raise NotImplementedError
+
+
+async def extract_call_job(text: str, doctors_patients: list[dict], *,
+                           now: datetime | None = None) -> CallJobExtraction:
+    raise NotImplementedError
+
+
+async def compare_images(prior_b64: str, new_b64: str, context: str) -> str:
+    raise NotImplementedError
