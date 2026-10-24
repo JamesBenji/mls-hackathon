@@ -6,13 +6,14 @@ dashboard and telephony layer consume.
 """
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import medgemma, models
 from app.database import get_db
-from app.services import clinical
+from app.services import clinical, notify
 from app.photos.routes import router as photo_router
 
 app = FastAPI(title="Guardian API", version="0.1.0")
@@ -218,3 +219,41 @@ async def analyze(patient_id: int, body: AnalyzeIn,
             db, body.call_session_id, patient_id, body.transcript, result
         )
     return {"analysis": result, "saved": saved}
+
+
+# --- Reports: detail, PDF download, doctor notification ---
+
+@app.get("/reports/{report_id}")
+def get_report(report_id: int, db: Session = Depends(get_db)):
+    r = db.get(models.CallReport, report_id)
+    if not r:
+        raise HTTPException(404, "report not found")
+    return {
+        "id": r.id, "patient_id": r.patient_id,
+        "summary": r.summary, "soap_note": r.soap_note,
+        "structured_data": r.structured_data, "risk_flags": r.risk_flags,
+        "escalated": r.escalated, "pdf_path": r.pdf_path,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+@app.get("/reports/{report_id}/pdf")
+async def download_report_pdf(report_id: int, db: Session = Depends(get_db)):
+    r = db.get(models.CallReport, report_id)
+    if not r:
+        raise HTTPException(404, "report not found")
+    # Generate on demand if not already rendered.
+    if not r.pdf_path:
+        await notify.notify_doctor(db, report_id)
+        db.refresh(r)
+    return FileResponse(r.pdf_path, media_type="application/pdf",
+                        filename=f"guardian_report_{report_id}.pdf")
+
+
+@app.post("/reports/{report_id}/notify")
+async def notify_report(report_id: int, db: Session = Depends(get_db)):
+    """Generate PDF + email the doctor (summary + dashboard link + PDF)."""
+    try:
+        return await notify.notify_doctor(db, report_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))

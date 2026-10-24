@@ -33,3 +33,4 @@ build/
 private-photos/
 *firebase*adminsdk*.json
 service-account*.json
+reports_out/

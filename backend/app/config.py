@@ -43,8 +43,10 @@ class Settings(BaseSettings):
     # --- Scheduling ---
     callback_default_minutes: int = 15                 # use 1 for demos
 
-    # --- Email (SendGrid/Resend) ---
-    email_api_key: str | None = None
+    # --- Email (Gmail SMTP with an App Password) ---
+    # Create at: Google Account -> Security -> 2-Step Verification -> App passwords
+    gmail_address: str | None = None          # e.g. you@gmail.com
+    gmail_app_password: str | None = None      # 16-char app password (no spaces)
     email_from: str = "guardian@example.com"
 
 
