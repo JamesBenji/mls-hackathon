@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     gemma_api_key: str | None = Field(
         None, validation_alias=_env("GOOGLE_API_KEY", "GEMMA_API_KEY")
     )
-    gemma_model: str = "gemma-4-31b-it"
+    gemma_model: str = "gemma-4-26b-a4b-it"
     gemma_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     clinical_pipeline: str = "two_stage"  # two_stage | single
     model_timeout_s: float = 120.0

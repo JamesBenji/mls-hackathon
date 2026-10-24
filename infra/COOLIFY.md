@@ -42,7 +42,7 @@ The production Compose mounts `/opt/medicall/secrets/elevenlabs-webhook-secret` 
 
 Guardian Main contains the merged plan-driven photo workflow and the signed post-call webhook. Leave `ELEVEN_IMMEDIATE_CALL_BRANCH_ID` empty (remove any old staged branch value) to use Main. Explicit branch overrides remain available for staging. Calls use the normal agent duration unless the API explicitly requests an override. Set `MOCK_TELEPHONY=false` only when real calls are intended; this also affects approved scheduled calls.
 
-- Cloud Gemma: server-only `GOOGLE_API_KEY`, `GEMMA_MODEL=gemma-4-31b-it`.
+- Cloud Gemma: server-only `GOOGLE_API_KEY`, `GEMMA_MODEL=gemma-4-26b-a4b-it`. Update any explicit Coolify model override when upgrading; an existing `GEMMA_MODEL` value overrides the Compose default. Generation retries provider 5xx twice within its original timeout budget. Structured responses are still validated against the full Pydantic schema after extracting a JSON object from prose-wrapped replies.
   No Ollama, local model downloads, or GPU service is needed.
 - ElevenLabs: `ELEVEN_API_KEY`, `ELEVEN_WEBHOOK_SECRET`, and an independent strong
   `ELEVEN_TOOL_AUTH_TOKEN`. Existing agent/phone IDs in the example are public

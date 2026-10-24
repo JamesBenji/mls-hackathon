@@ -30,7 +30,7 @@ Open http://localhost:8000/docs for the interactive API.
 | Variable | What |
 |----------|------|
 | `GOOGLE_API_KEY` | Gemma 4 cloud API key (required for the clinical brain) |
-| `GEMMA_MODEL` | defaults to `gemma-4-31b-it` |
+| `GEMMA_MODEL` | defaults to `gemma-4-26b-a4b-it` |
 | `ELEVEN_API_KEY` / `ELEVEN_AGENT_ID` / `ELEVEN_AGENT_PHONE_NUMBER_ID` | voice calls |
 | `ELEVEN_WEBHOOK_SECRET` / `ELEVEN_TOOL_AUTH_TOKEN` | webhook + agent-tool auth |
 | `TWILIO_*` | SMS sending + inbound webhook signature validation |

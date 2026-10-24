@@ -63,6 +63,8 @@ log = logging.getLogger(__name__)
 META_TIMEOUT_S = 5.0  # GET /models
 PROBE_TIMEOUT_S = 20.0  # latency probe for /health/models
 PROBE_NUM_PREDICT = 8
+_5XX_RETRIES = 2
+_RETRY_BACKOFF_S = 1.0
 _PROBE_MESSAGES = [{"role": "user", "content": "Reply with the single word: ok"}]
 _DETAIL_MAX = 200  # chars of an API error body kept in exception messages
 _RETRY_ECHO_MAX = 8000  # chars of an invalid reply echoed back on the retry
@@ -153,10 +155,11 @@ def _headers() -> dict[str, str]:
 
 async def _request(method: str, path: str, *, timeout: float,
                    payload: dict | None = None, model: str | None = None) -> dict:
-    """One HTTP round trip to the API with the error mapping applied.
+    """One logical request, including bounded retries for provider 5xx errors.
 
     `timeout` is also enforced as an asyncio deadline: httpx timeouts are
-    per read, and injected transports (tests) ignore them entirely.
+    per read, and injected transports (tests) ignore them entirely. All retries
+    and backoff share the same deadline; patient data is never logged.
     """
     what = f"{method} {path}" + (f" model={model!r}" if model else "")
     try:
@@ -167,6 +170,14 @@ async def _request(method: str, path: str, *, timeout: float,
                                          timeout=timeout, trust_env=False) as client:
                 resp = await client.request(method, path, json=payload,
                                             headers=_headers())
+                for retry in range(1, _5XX_RETRIES + 1):
+                    if resp.status_code < 500:
+                        break
+                    log.warning("gemma api %s: HTTP %d, retrying (%d/%d)",
+                                what, resp.status_code, retry, _5XX_RETRIES)
+                    await asyncio.sleep(_RETRY_BACKOFF_S)
+                    resp = await client.request(method, path, json=payload,
+                                                headers=_headers())
     except (TimeoutError, httpx.TimeoutException) as exc:
         raise ModelUnavailable(f"Gemma API timed out after {timeout:g}s ({what})") from exc
     except (httpx.TransportError, httpx.InvalidURL) as exc:
@@ -379,6 +390,37 @@ def _strip_fence(text: str) -> str:
     return match.group(1) if match else text
 
 
+def _extract_json(text: str) -> str:
+    """Extract a balanced JSON object without weakening schema validation."""
+    fenced = _strip_fence(text)
+    if fenced != text:
+        return fenced
+    start = text.find("{")
+    if start < 0:
+        return text
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text[start:], start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return text
+
+
 def _validation_problems(exc: ValidationError) -> list[str]:
     """Compact "field: message" lines. Input values are left out so model
     output (and the patient text it may echo) never lands in logs/messages."""
@@ -424,7 +466,7 @@ async def chat_json(model: str, messages: list[dict], schema_model: type[M], **k
 
     reply = await chat(model, conversation, schema=schema, **kw)
     try:
-        return schema_model.model_validate_json(_strip_fence(reply))
+        return schema_model.model_validate_json(_extract_json(reply))
     except ValidationError as exc:
         problems = _validation_problems(exc)
     log.warning("%s from %s failed validation, retrying once: %s",
@@ -439,7 +481,7 @@ async def chat_json(model: str, messages: list[dict], schema_model: type[M], **k
     ]
     reply = await chat(model, retry, schema=schema, **kw)
     try:
-        return schema_model.model_validate_json(_strip_fence(reply))
+        return schema_model.model_validate_json(_extract_json(reply))
     except ValidationError as exc:
         problems = _validation_problems(exc)
         log.warning("%s from %s still invalid after one retry: %s",
