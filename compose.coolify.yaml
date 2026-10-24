@@ -1,0 +1,99 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
+    expose:
+      - "8000"
+    environment:
+      GUARDIAN_API_KEY: ${GUARDIAN_API_KEY:?Set a strong server-side GUARDIAN_API_KEY}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong database password}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://medicall.nulkode.dev}
+      TIMEZONE: ${TIMEZONE:-Europe/Berlin}
+      TZ: ${TIMEZONE:-Europe/Berlin}
+      MOCK_TELEPHONY: ${MOCK_TELEPHONY:-true}
+      SCHEDULER_ENABLED: "true"
+      SCHEDULER_JOBSTORE_URL: ""
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      CORS_ORIGIN_REGEX: ""
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMMA_MODEL: ${GEMMA_MODEL:-gemma-4-31b-it}
+      CLINICAL_PIPELINE: ${CLINICAL_PIPELINE:-two_stage}
+      ELEVEN_API_KEY: ${ELEVEN_API_KEY:-}
+      ELEVEN_AGENT_ID: ${ELEVEN_AGENT_ID:-agent_5201m5q0f0e5e17asvhek5vz3v6a}
+      ELEVEN_AGENT_PHONE_NUMBER_ID: ${ELEVEN_AGENT_PHONE_NUMBER_ID:-phnum_2101m5pxtpy0ecv86y3d8s5asqhy}
+      ELEVEN_WEBHOOK_SECRET: ${ELEVEN_WEBHOOK_SECRET:-}
+      ELEVEN_TOOL_AUTH_TOKEN: ${ELEVEN_TOOL_AUTH_TOKEN:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_API_KEY_SID: ${TWILIO_API_KEY_SID:-}
+      TWILIO_API_KEY_SECRET: ${TWILIO_API_KEY_SECRET:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_NUMBER: ${TWILIO_NUMBER:-}
+      GMAIL_ADDRESS: ${GMAIL_ADDRESS:-}
+      GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-guardian@example.com}
+      DOCTOR_ALERT_EMAIL: ${DOCTOR_ALERT_EMAIL:-}
+      PHOTO_STORAGE_DIR: /var/lib/guardian/private-photos
+      PHOTO_PUSH_ENABLED: ${PHOTO_PUSH_ENABLED:-false}
+    volumes:
+      - private-photos:/var/lib/guardian/private-photos
+      # app/services/pdf.py resolves ../../reports_out relative to that module.
+      - pdf-reports:/app/app/reports_out
+    networks:
+      - default
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: guardian
+      POSTGRES_USER: guardian
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong database password}
+      TZ: ${TIMEZONE:-Europe/Berlin}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+  database:
+    internal: true
+
+volumes:
+  postgres-data:
+  private-photos:
+  pdf-reports:
