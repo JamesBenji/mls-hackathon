@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     # so the app is fully testable/demoable offline.
     mock_telephony: bool = True
     database_url: str = "postgresql+psycopg://I767867@localhost:5432/guardian"
+    photo_storage_dir: str = "./private-photos"
+    photo_max_bytes: int = 8 * 1024 * 1024
+    photo_max_pixels: int = 20_000_000
+    photo_push_enabled: bool = False
+    photo_credential_days: int = 90
 
     # --- MedGemma via Ollama (clinical brain) ---
     medgemma_url: str = "http://localhost:11434"

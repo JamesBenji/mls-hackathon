@@ -2,6 +2,8 @@
 
 AI clinical voice-agent. See [`SCOPE.md`](./SCOPE.md) for the full spec.
 
+Patient photo sync: see [`PHOTO_SYNC.md`](./PHOTO_SYNC.md) for secure provisioning, additive database setup, exact Flutter contract, FCM, and deployment limitations. Existing clinical routes remain unauthenticated; do not expose this entire API publicly without a separate access gateway.
+
 Stack: **FastAPI** (backend) · **Postgres** · **MedGemma via Ollama** (brain) ·
 **ElevenLabs** (calls) · **Flutter** (doctor dashboard, web + mobile).
 
@@ -30,7 +32,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-python -m app.seed           # create tables + seed 3 demo patients
+python -m app.seed           # DESTRUCTIVE: disposable demo DB only; drops clinical tables
+# Existing DB: use python -m app.photos.admin init-schema instead (never drops data).
 uvicorn app.main:app --reload --port 8000
 ```
 
