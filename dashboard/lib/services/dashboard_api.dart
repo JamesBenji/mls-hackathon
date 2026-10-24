@@ -148,6 +148,16 @@ class HttpDashboardApi implements DashboardApi {
       clinical: true,
       body: {'transcript': transcript},
     ),
-    (json) => (json as Json)['analysis'] as Json,
+    (json) {
+      final analysis = (json as Json)['analysis'] as Json;
+      // Accept the current nested contract and older flat responses.
+      return {
+        ...analysis,
+        if (analysis['report'] is Map)
+          ...Map<String, dynamic>.from(analysis['report'] as Map),
+        if (analysis['triage'] is Map)
+          ...Map<String, dynamic>.from(analysis['triage'] as Map),
+      };
+    },
   );
 }

@@ -1,49 +1,66 @@
-# Guardian clinical workspace
+# Medicall · Follow-up plans
 
-A responsive Flutter doctor dashboard using Forui with a teal/mint clinical theme. Includes the web scaffold only; the layout also adapts to desktop and narrow mobile widths.
+Independent Flutter package with a Windows-first Forui workspace and a stacked narrow-screen fallback. Medicall sets follow-up calls and what to track; it is not an EHR. The default `lib/main.dart` launches `MedicallApp`.
 
-## Run
+## Safe local preview
 
-Requires Flutter 3.44 or newer and Dart 3.12. The lockfile pins Forui 0.25.0, the current compatible release resolved with Flutter 3.44.8. Forui APIs were checked against the [official documentation](https://forui.dev/docs/llms.txt) and installed package source.
+Requires Flutter 3.44+/Dart 3.12 and the Visual Studio desktop C++ workload for Windows.
+Run from `dashboard/`:
 
 ```sh
 flutter pub get
-flutter run -d chrome --dart-define=API_BASE=http://localhost:8000
-flutter build web --dart-define=API_BASE=https://your-api.example.org
+flutter run -d windows --dart-define=SAMPLE_DATA=true
 ```
 
-Run commands from `dashboard/`. `API_BASE` is compile-time configuration, defaults to `http://localhost:8000`, and supports a path prefix. Rebuild when changing it. Use a reachable LAN address rather than localhost for a physical device. Serve `build/web/` over HTTP(S); HTTPS dashboards require an HTTPS API and the backend must permit the dashboard's origin through CORS. No credentials belong in a Dart define: compiled web configuration is public.
+Sample mode constructs only `SamplePlanApi`, which has no HTTP client or network code. Edits, drafts, activation, pause and finish work in memory until restart. **Call now never places a call or adds fabricated call results.** Select Alex Morgan under Needs review for wound pain/redness/photo observations; select Sam Taylor under Active for cough/sleep/free-text breathing observations. Fixtures include multiple calls, numeric trends and missing/unclear answers. They are synthetic sample history, not live results. Regeneration uses a fixed respiratory/wound mapping, not an actual Gemma invocation. No backend, API key, inference service or phone provider is needed. The existing unrelated preview app is not used.
 
-## Screens and behavior
+## Backend session
 
-- **Patient overview:** risk-prioritized directory, name/phone/condition/ID search, risk filters, counts derived from returned records, explicit manual refresh with a last-refresh time, and loading/empty/error/retry states. Desktop uses a sidebar; narrow layouts use compact navigation and stacked cards.
-- **Patient record:** clinical overview, medication doses/schedules, recorded vitals sorted newest first, report summaries, and profile editing. Profile edits support height, weight, risk and comma-separated chronic conditions; empty height/weight clears those fields. Manual vitals use explicit measurement types and units, numeric validation and a server-assigned timestamp. Saves refresh details, and returning to the directory refreshes the patient list.
-- **Triage review:** confirm the recommendation or choose an override, then explicitly record the doctor's review via the existing API. The backend marks a review complete; it does not execute a callback, ambulance request or appointment. The UI states this before and after submission.
-- **Clinical support:** question-plan generation and transcript analysis run only after a button press, never on page load or refresh. These operations may invoke MedGemma and have a 120-second timeout. Analysis is displayed as an unsaved result; no fabricated call-session ID is sent, so no report or triage decision is persisted. Refreshing details clears generated guidance to avoid retaining results based on an old profile.
+```sh
+flutter run -d windows
+```
 
-No calls, scheduling, autonomous follow-up, fabricated live status or sample patient data are presented as operational features. Follow-up remains doctor-directed through the care team's existing workflow because this backend does not expose those write APIs. Database timestamps are shown as returned; the current backend's naive timestamps do not establish a timezone.
+Enter server address, X-API-Key and doctor ID in the connection screen. Values are held only for this session and not saved. Disconnect closes the client and clears the key. `API_BASE`, `DOCTOR_ID` and optionally `API_KEY` are compile-time **development-only** defaults; never bake a shared production secret into a distributable. Use HTTPS beyond localhost. A shared key is not a doctor login and provides no per-doctor authorization; doctor ID explicitly selects the owner of newly drafted plans, not an authenticated identity. The list is whatever the server returns, not an access-control boundary.
 
-## Architecture and integration
+Backend follow-up-plan endpoints from [PR #4](https://github.com/JamesBenji/mls-hackathon/pull/4) must be deployed first. The UI is aligned to `backend/FOLLOW_UP_CONTRACT.md` from that PR. Until deployment use sample mode; no production availability is implied. Web fallback: `flutter run -d chrome --dart-define=SAMPLE_DATA=true`. Real web sessions also need backend CORS and compatible HTTPS.
 
-`lib/services/dashboard_api.dart` defines the injectable `DashboardApi` interface and its HTTP implementation. `lib/models/` contains parsing, `lib/screens/` owns screen state and forms, and `lib/widgets/` contains shared Forui presentation. `GuardianApp(api: ...)` accepts a fake or authenticated implementation. The HTTP client is injected and owned by the app, so auth headers can be added by a wrapping client without rewriting screens. The app closes only the client it creates.
+## Workflow
 
-Existing endpoints used: `GET /patients`, `GET/PATCH /patients/{id}`, `POST /patients/{id}/vitals`, `GET /triage`, `POST /triage/{id}/review`, `GET /clinical/{id}/question-plan`, and `POST /clinical/{id}/analyze`. Vitals are read from the existing patient detail payload, avoiding redundant requests to `GET /patients/{id}/vitals`.
+- Active / Needs review (draft and paused) / Finished lists, search, refresh, loading/error/retry and empty states.
+- New plan selects an existing patient via `GET /patients` and submits doctor instructions. A 422 clarification is shown so instructions can be corrected; it never activates automatically.
+- The doctor writes **natural-language instructions only**, with schedule controls. Gemma derives context, typed tracking items, questions and photo policy. These appear as a readable, read-only interpretation, not a field/template/schema editor. Correct the instructions to regenerate the interpretation. Saving never activates.
+- Activation asks for explicit confirmation; pause an active plan before editing. Reactivation is explicit. Finish stops follow-up. Call now is available only for active plans with a returned phone number and requires confirmation. Pending actions lock duplicate requests.
+- Results derive from per-plan item definitions and observations: latest-answer cards, numeric trends with missing-data gaps, categorical/boolean timelines, text quotes, and expandable per-call history. Each series is isolated by item ID, plan revision and unit; unknown revisions do not get a numeric chart. Latest missing/unclear/declined answers are never replaced with older values. Charts show observed values, not AI-inferred target ranges, and have expandable textual tables. Reported and measured timestamps are labeled separately; select a chart position or expand a row to inspect the patient quote and call context. Patient-reported observations are separate from AI interpretation/summaries. No polling or fabricated live status. Photo content is not fetched without a specified authenticated content contract; the attachment state remains visible.
 
-All requests check success status, handle network/JSON/schema failures and have bounded timeouts (25 seconds normally). Pending actions disable duplicate submissions. A timeout cannot cancel server-side processing; refresh before retrying a write to avoid duplicate vital entries. HTTP errors intentionally do not display raw backend bodies or sensitive tracebacks. No automatic polling, retries, local persistence or patient-data logging is used.
+## Contract
 
-For photo-sync integration, add a separate photo API/service and photo section to `patient_detail_screen.dart` rather than embedding networking in UI. This change does not touch `backend/`. A parallel PR that changes the original `lib/main.dart` will need to move those additions into the new app/service/detail-screen split; retain `main.dart` as the tiny entry point. If auth becomes mandatory, inject an authenticated HTTP client/API and implement the required sign-in flow; this dashboard does not pretend to provide authentication.
+`HttpPlanApi` sends `X-API-Key` on all requests and preserves an API base path prefix.
 
-## Security limitations
+| Operation | Endpoint / body |
+|---|---|
+| List / detail | `GET /follow-up-plans`, `GET /follow-up-plans/{id}` |
+| Existing identities | `GET /patients` array with `id`, `name`, `phone` (optional timezone) |
+| Generate draft | `POST /follow-up-plans/draft` with `{doctor_id, patient_id, instructions}` → plan or 422 `detail` |
+| Edit | `PATCH /follow-up-plans/{id}` with `instructions`, `schedule`; changed instructions must regenerate derived tracking definitions and advance the plan revision |
+| Actions | `POST /follow-up-plans/{id}/activate`, `/pause`, `/finish`, `/call` |
 
-The existing backend APIs are unauthenticated, expose patient records by ID, accept writes without authorization, and allow broad CORS. The dashboard does not fix those server limitations and must not be publicly deployed with real patient data. Production use needs server-enforced authentication, doctor/patient authorization, restricted CORS, transport security, audit logging, appropriate data governance and server-side validation. Client form validation is only a usability aid, not a security boundary. There is no invented doctor identity or misleading login screen.
+Photo policy: `none|first_call|every_call`. Schedule: `timezone` (IANA), `local_time` (HH:mm), `frequency` (`once|daily`), `start_date`, `end_date` (YYYY-MM-DD). The server must validate timezone, scheduling semantics, authorization, transitions and real call safety. Mutations may return an empty success response; the UI fetches detail again. No patient creation API is assumed.
 
-## Checks
+Plan fields: `id`, `doctor_id`, `patient_id`, `patient_name`, `instructions`, `context`, `questions`, `tracked_items`, `photo_policy`, nullable `schedule`, `status` (`draft|active|paused|finished`), nullable `next_call_at`, nullable `last_summary`, `revision`, optional `calls`. A draft without a schedule must be edited before activation. Action responses including `/call` are updated plan dictionaries; the UI fetches detail again after success. Only changed instructions/schedule fields are patched.
+
+Typed `tracked_items`: `{id,label,type:number|boolean|choice|text|photo,unit?,min?,max?,options?:string[]}`. Legacy strings remain readable. `min/max` are instructed scale bounds, never inferred clinical targets. `observations`: `{id,item_id,plan_revision,call_session_id,value,status:reported|missing|unclear|declined,unit,source_quote,reported_at,measured_at?,definition_snapshot}`. Plan `revision` identifies current observations. Immutable observation snapshots supply historical labels/types/units/scales, including items removed from the current plan. Distinct IDs/revisions/units or incompatible snapshot bounds/types/options never share a chart line. Missing or incompatible observations break the line; missing is never zero. Charts use report-order positions (explicitly labeled), not elapsed-time spacing. Backend naive ISO timestamps are explicitly interpreted/displayed as UTC, separate from the schedule's IANA timezone.
+
+**Integration boundaries:** PR #4 guarantees instruction regeneration, meaningful-edit revision increments, immutable observation snapshots and explicit activation. Calls are `{id,call_session_id,status,started_at,summary,results}`; summary/results are labeled AI interpretation, never patient measurements. Immediate `/call` is an extra call and leaves the next scheduled slot intact. Pause/finish block future work but do not hang up an in-progress call. Photo observation values can identify verified uploaded assets, but dashboard-authenticated image-content retrieval is not specified, so no image requests or guessed URLs are made. Shared-key doctor authorization remains a limitation; use a trusted proxy until identity-bound auth exists. Timeout errors instruct refresh before retry because the server may already have accepted a write; no automatic write retries. No deployed backend/Gemma/telephony/FCM integration has been verified.
+
+## Structure and checks
+
+`medicall_app.dart` owns theme/session configuration; `models/follow_up_plan.dart` owns plan/identity models; `services/plan_api.dart` defines the contract and HTTP client; `sample_plan_api.dart` is isolated in-memory preview data; workspace, editor and detail are separate screens. Existing `GuardianApp`, clinical screens and their tests remain available as legacy code, but are not reachable from the main workspace. The legacy analysis adapter accepts nested `{analysis:{report,triage}}` and older flat analysis.
 
 ```sh
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze
 flutter test
-flutter build web --dart-define=API_BASE=http://localhost:8000
+flutter build windows --dart-define=SAMPLE_DATA=true
 ```
 
-Tests use injected fakes and `http`'s mock client; they do not require backend services or inference. Coverage includes parsing/risk order, HTTP/network/schema/timeout failures, endpoint payloads, loading/empty/retry states, duplicate refresh prevention, directory search/filtering, narrow/tablet/desktop layouts, real triage submission wiring, explicit inference and profile validation. A successful web build does not replace testing against a running backend; no live server or MedGemma verification is implied.
+Official [Forui docs](https://forui.dev/docs/llms.txt) and pinned 0.25 package source were used. Tests use local fakes/mocks, never the real backend or a calling provider. No backend files are changed.
