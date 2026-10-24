@@ -1,0 +1,9 @@
+Agent: Hello, this is Guardian, an AI assistant calling on behalf of Dr. Lee. Am I speaking with John Carter?
+Patient: Yes.
+Agent: Did you take your blood pressure today? What was the reading?
+Patient: Yes, one thirty-five over eighty-five.
+Agent: Are you having any chest pain, trouble breathing, or severe dizziness right now?
+Patient: No chest pain or trouble breathing. I don't have any dizziness either.
+Agent: Have you fainted or noticed any bleeding?
+Patient: No, I have not fainted, and there is no heavy bleeding.
+Agent: Thank you, John. Goodbye.
