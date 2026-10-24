@@ -22,6 +22,9 @@ build/
 .idea/
 .vscode/
 
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
 # Local artifacts
 *.pdf
 *.sqlite
