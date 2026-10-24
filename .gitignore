@@ -29,3 +29,7 @@ build/
 *.pdf
 *.sqlite
 *.db
+.ruff_cache/
+private-photos/
+*firebase*adminsdk*.json
+service-account*.json

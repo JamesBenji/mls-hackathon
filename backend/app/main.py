@@ -13,8 +13,10 @@ from sqlalchemy.orm import Session
 from app import medgemma, models
 from app.database import get_db
 from app.services import clinical
+from app.photos.routes import router as photo_router
 
 app = FastAPI(title="Guardian API", version="0.1.0")
+app.include_router(photo_router)
 
 # Flutter web/mobile will call this during dev; wide-open CORS for the hackathon.
 app.add_middleware(
