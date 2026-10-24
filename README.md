@@ -46,22 +46,31 @@ simulated, MedGemma reports "down") so the API still works.
 | GET  | `/health` | API + MedGemma status |
 | GET  | `/patients` | list (high-risk first in UI) |
 | GET  | `/patients/{id}` | detail: vitals, meds, reports |
-| POST | `/calls/start` | build question plan → place call |
-| POST | `/calls/{id}/analyze` | transcript → MedGemma → report + triage |
-| GET  | `/calls/{id}` | session + report + triage |
+| PATCH | `/patients/{id}` | edit demographics/vitals |
+| GET/POST | `/patients/{id}/vitals` | list / add a reading |
+| GET  | `/clinical/{id}/question-plan` | MedGemma: history-aware questions |
+| POST | `/clinical/{id}/analyze` | MedGemma: transcript → report + triage |
 | GET  | `/triage` | decisions awaiting doctor review |
 | POST | `/triage/{id}/review` | confirm/override model decision |
 
+> **Telephony (ElevenLabs/Twilio) is a separate workstream** — see
+> `ELEVENLABS_TWILIO_SETUP.md`. That layer calls into `app/services/clinical.py`
+> (`build_question_plan`, `analyze`, `persist_analysis`), the seam between the
+> phone/SMS adapters and the MedGemma clinical brain.
+
 ### Quick test (no keys needed)
 ```bash
-curl -X POST localhost:8000/calls/start \
-  -H 'Content-Type: application/json' -d '{"patient_id":1}'
+# History-aware question plan (falls back to the doctor's template if
+# MedGemma isn't pulled yet):
+curl localhost:8000/clinical/1/question-plan
 
-curl -X POST localhost:8000/calls/1/analyze \
+# Run the clinical brain over a transcript. Pass a call_session_id to persist.
+curl -X POST localhost:8000/clinical/1/analyze \
   -H 'Content-Type: application/json' \
   -d '{"transcript":"Patient: my chest feels tight and I am dizzy."}'
 ```
-With Ollama running, `/analyze` returns real triage (urgency + action).
+With `ollama serve` running and `medgemma:4b` pulled, `/analyze` returns real
+triage (urgency + recommended action + escalation).
 
 ## 3. Dashboard (Flutter)
 
@@ -72,24 +81,27 @@ flutter run -d chrome        # web
 # or: flutter run             # mobile (change apiBase to your LAN IP)
 ```
 
-The dashboard lists patients (high-risk first), opens a detail view
-(vitals, meds, past reports = agent memory), and has a **Start check-in
-call** button that calls `/calls/start`.
+The dashboard lists patients (high-risk first) and opens a detail view
+(vitals, meds, past reports = agent memory).
 
 ---
 
 ## Project layout
 ```
 backend/app/
-  main.py              FastAPI app + read endpoints
-  routers_calls.py     call orchestration + triage review
+  main.py              FastAPI app: patients, vitals, triage, clinical endpoints
+  services/
+    clinical.py        interface the telephony layer calls (wraps MedGemma)
   agent.py             MedGemma reasoning (question plan, analyze)
   medgemma.py          Ollama client (graceful fallback)
-  channels/            swappable interface adapters (ElevenLabs...)
   models.py            SQLAlchemy data model
   seed.py              demo data
-dashboard/lib/main.dart  Flutter doctor dashboard
+dashboard/lib/main.dart  Flutter doctor dashboard (separate workstream)
 ```
+
+**Workstreams:** backend clinical core (this app) · Flutter dashboard ·
+ElevenLabs/Twilio telephony (`ELEVENLABS_TWILIO_SETUP.md`). Telephony plugs
+into `app/services/clinical.py` so the three stay decoupled.
 
 ---
 

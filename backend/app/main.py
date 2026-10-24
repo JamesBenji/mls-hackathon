@@ -1,16 +1,18 @@
-"""FastAPI app — channel-agnostic core.
+"""FastAPI app — Guardian backend (clinical core + data/CRUD).
 
-Read-only endpoints for now (patients, reports, triage, medgemma health).
-Call orchestration, triage engine, and channel adapters come next.
+Telephony (ElevenLabs/Twilio) is owned by a separate integration and lives
+in its own modules; this app exposes the clinical reasoning + data the
+dashboard and telephony layer consume.
 """
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import medgemma, models
 from app.database import get_db
-from app.routers_calls import router as calls_router
+from app.services import clinical
 
 app = FastAPI(title="Guardian API", version="0.1.0")
 
@@ -21,8 +23,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(calls_router)
 
 
 @app.get("/health")
@@ -108,3 +108,111 @@ def list_triage(db: Session = Depends(get_db)):
         }
         for t in rows
     ]
+
+
+# --- Write / edit endpoints (dashboard) ---
+
+class PatientPatch(BaseModel):
+    blood_type: str | None = None
+    height_cm: float | None = None
+    weight_kg: float | None = None
+    category: str | None = None
+    risk_level: str | None = None
+    chronic_conditions: list[str] | None = None
+
+
+@app.patch("/patients/{patient_id}")
+def edit_patient(patient_id: int, body: PatientPatch,
+                 db: Session = Depends(get_db)):
+    p = db.get(models.Patient, patient_id)
+    if not p:
+        raise HTTPException(404, "patient not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(p, field, value)
+    db.commit()
+    return {"id": p.id, "updated": body.model_dump(exclude_unset=True)}
+
+
+class VitalIn(BaseModel):
+    type: str
+    value: float
+    unit: str | None = None
+    source: str = "manual"
+
+
+@app.post("/patients/{patient_id}/vitals")
+def add_vital(patient_id: int, body: VitalIn, db: Session = Depends(get_db)):
+    if not db.get(models.Patient, patient_id):
+        raise HTTPException(404, "patient not found")
+    v = models.Vital(patient_id=patient_id, type=body.type, value=body.value,
+                     unit=body.unit, source=body.source)
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    return {"id": v.id, "type": v.type, "value": v.value}
+
+
+@app.get("/patients/{patient_id}/vitals")
+def list_vitals(patient_id: int, db: Session = Depends(get_db)):
+    rows = db.scalars(
+        select(models.Vital).where(models.Vital.patient_id == patient_id)
+        .order_by(models.Vital.recorded_at)
+    ).all()
+    return [{"type": v.type, "value": v.value, "unit": v.unit,
+             "recorded_at": v.recorded_at.isoformat() if v.recorded_at else None}
+            for v in rows]
+
+
+class TriageReview(BaseModel):
+    confirmed: bool = True
+    override_action: str | None = None
+
+
+@app.post("/triage/{triage_id}/review")
+def review_triage(triage_id: int, body: TriageReview,
+                  db: Session = Depends(get_db)):
+    t = db.get(models.TriageDecision, triage_id)
+    if not t:
+        raise HTTPException(404, "triage decision not found")
+    t.doctor_reviewed = True
+    if body.override_action:
+        t.recommended_action = body.override_action
+    db.commit()
+    return {"id": t.id, "doctor_reviewed": True,
+            "recommended_action": t.recommended_action}
+
+
+# --- Clinical (MedGemma) — usable directly, and by the telephony layer ---
+
+@app.get("/clinical/{patient_id}/question-plan")
+async def question_plan(patient_id: int, db: Session = Depends(get_db)):
+    """Build a history-aware question plan for a patient (MedGemma)."""
+    try:
+        plan = await clinical.build_question_plan(db, patient_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return {"patient_id": patient_id, "question_plan": plan}
+
+
+class AnalyzeIn(BaseModel):
+    transcript: str
+    call_session_id: int | None = None
+
+
+@app.post("/clinical/{patient_id}/analyze")
+async def analyze(patient_id: int, body: AnalyzeIn,
+                  db: Session = Depends(get_db)):
+    """Run MedGemma over a transcript. Persists if a call_session_id is given.
+
+    Lets you exercise the clinical brain without the telephony layer.
+    """
+    try:
+        result = await clinical.analyze(db, patient_id, body.transcript)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    saved = None
+    if body.call_session_id is not None:
+        saved = clinical.persist_analysis(
+            db, body.call_session_id, patient_id, body.transcript, result
+        )
+    return {"analysis": result, "saved": saved}
