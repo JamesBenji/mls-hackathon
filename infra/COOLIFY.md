@@ -38,6 +38,10 @@ The authoritative rollout contract is `backend/FOLLOW_UP_CONTRACT.md` from PR #4
 
 ## Integrations and secrets
 
+The production Compose mounts `/opt/medicall/secrets/elevenlabs-webhook-secret` read-only at `/run/secrets/elevenlabs-webhook-secret` and sets `ELEVEN_WEBHOOK_SECRET_FILE`. The file contains only the HMAC signing secret issued by the workspace webhook configured for `https://medicall.nulkode.dev/calls/webhook`; owner 10001:10001, mode 0400. It is already installed on the Medicall server. For another server, provision the file before deployment or change `ELEVEN_WEBHOOK_SECRET_HOST_PATH`. When configured, the file takes precedence over `ELEVEN_WEBHOOK_SECRET`; unreadable or missing credentials fail closed. Never copy the secret into this repository or support logs.
+
+For instant desktop calls, set `ELEVEN_IMMEDIATE_CALL_BRANCH_ID=agtbrch_7701m5q3y1cwf8bt2qbeeg78tf6t` until the reviewed photo branch is merged into Main. The branch must use plan-driven workflow instructions, not the inherited generic vital-sign workflow. Its signed post-call webhook must be explicitly selected under the branch's workspace overrides. Calls use the normal agent duration unless the API explicitly requests an override. Set `MOCK_TELEPHONY=false` only when real calls are intended; this also affects approved scheduled calls.
+
 - Cloud Gemma: server-only `GOOGLE_API_KEY`, `GEMMA_MODEL=gemma-4-31b-it`.
   No Ollama, local model downloads, or GPU service is needed.
 - ElevenLabs: `ELEVEN_API_KEY`, `ELEVEN_WEBHOOK_SECRET`, and an independent strong

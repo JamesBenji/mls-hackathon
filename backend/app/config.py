@@ -85,6 +85,7 @@ class Settings(BaseSettings):
         ),
     )
     eleven_webhook_secret: str | None = None  # post-call webhook HMAC secret
+    eleven_webhook_secret_file: str | None = None
     eleven_tool_auth_token: str | None = None  # Bearer token sent by agent tools
     eleven_base_url: str = "https://api.elevenlabs.io"
 

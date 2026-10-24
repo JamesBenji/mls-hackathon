@@ -27,6 +27,7 @@ services:
       ELEVEN_IMMEDIATE_CALL_BRANCH_ID: ${ELEVEN_IMMEDIATE_CALL_BRANCH_ID:-}
       ELEVEN_AGENT_PHONE_NUMBER_ID: ${ELEVEN_AGENT_PHONE_NUMBER_ID:-phnum_2101m5pxtpy0ecv86y3d8s5asqhy}
       ELEVEN_WEBHOOK_SECRET: ${ELEVEN_WEBHOOK_SECRET:-}
+      ELEVEN_WEBHOOK_SECRET_FILE: /run/secrets/elevenlabs-webhook-secret
       ELEVEN_TOOL_AUTH_TOKEN: ${ELEVEN_TOOL_AUTH_TOKEN:-}
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_API_KEY_SID: ${TWILIO_API_KEY_SID:-}
@@ -47,6 +48,12 @@ services:
       - type: bind
         source: ${FIREBASE_CREDENTIALS_HOST_PATH:-/opt/medicall/secrets/firebase-service-account.json}
         target: /run/secrets/firebase-service-account.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ELEVEN_WEBHOOK_SECRET_HOST_PATH:-/opt/medicall/secrets/elevenlabs-webhook-secret}
+        target: /run/secrets/elevenlabs-webhook-secret
         read_only: true
         bind:
           create_host_path: false

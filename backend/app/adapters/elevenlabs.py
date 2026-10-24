@@ -57,6 +57,7 @@ import json
 import logging
 import time
 import uuid
+from pathlib import Path
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -242,6 +243,11 @@ def verify_webhook(raw_body: bytes, signature_header: str | None) -> dict:
     """Verify an ElevenLabs post-call webhook and return the parsed event.
     Pass the raw request body, untouched (never re-serialized JSON)."""
     secret = settings.eleven_webhook_secret
+    if settings.eleven_webhook_secret_file:
+        try:
+            secret = Path(settings.eleven_webhook_secret_file).read_text().strip()
+        except OSError:
+            raise WebhookVerificationError("Webhook signing credential is unavailable") from None
     if not secret:
         log.error("ELEVEN_WEBHOOK_SECRET is not configured; rejecting ElevenLabs webhook")
         raise WebhookVerificationError("webhook secret not configured")
