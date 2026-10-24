@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:forui/forui.dart';
 import '../models/follow_up_plan.dart';
 import '../services/plan_api.dart';
-import '../widgets/clinical_widgets.dart';
+import '../widgets/workspace_widgets.dart';
 import '../widgets/plan_results.dart';
 
 class PlanDetail extends StatefulWidget {
@@ -25,17 +25,6 @@ class PlanDetail extends StatefulWidget {
 
 class _PlanDetailState extends State<PlanDetail> {
   late Future<List<PlanPatient>> _patients = widget.api.patients();
-  Widget _section(String title, Widget child) => Padding(
-    padding: const EdgeInsets.only(bottom: 16),
-    child: SectionCard(
-      title: title,
-      child: Material(color: Colors.transparent, child: child),
-    ),
-  );
-  Widget _lines(List<String> lines) => Text(
-    lines.isEmpty ? 'Not specified' : lines.map((s) => '• $s').join('\n'),
-    style: const TextStyle(height: 1.7),
-  );
   String _value(dynamic value) {
     if (value == null || '$value'.isEmpty) return 'Not provided';
     if (value is Map) {
@@ -49,6 +38,10 @@ class _PlanDetailState extends State<PlanDetail> {
     return '$value';
   }
 
+  Widget _section(String title, Widget child) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: SectionCard(title: title, child: child),
+  );
   @override
   Widget build(BuildContext context) {
     final p = widget.plan;
@@ -60,8 +53,11 @@ class _PlanDetailState extends State<PlanDetail> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Plan #${p.id} · ${p.status}'),
-              const SizedBox(height: 12),
+              Text(
+                'Plan #${p.id} · ${p.status} · revision ${p.revision ?? '—'}',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF62766F)),
+              ),
+              const SizedBox(height: 8),
               FutureBuilder<List<PlanPatient>>(
                 future: _patients,
                 builder: (context, snapshot) {
@@ -74,58 +70,73 @@ class _PlanDetailState extends State<PlanDetail> {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Phone: ${patient == null || patient.phone.isEmpty ? 'Not available' : patient.phone}',
+                      Wrap(
+                        spacing: 20,
+                        runSpacing: 4,
+                        children: [
+                          Text(
+                            'Phone: ${patient == null || patient.phone.isEmpty ? 'Not available' : patient.phone}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          Text(
+                            'Timezone: ${_value(p.schedule['timezone'])}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ],
                       ),
-                      Text('Timezone: ${_value(p.schedule['timezone'])}'),
                       if (snapshot.hasError)
-                        TextButton(
-                          onPressed: () =>
+                        WorkspaceButton(
+                          onPress: () =>
                               setState(() => _patients = widget.api.patients()),
+                          variant: FButtonVariant.ghost,
                           child: const Text('Retry patient details'),
                         ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 12),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
                         children: [
                           if (p.needsReview)
-                            ClinicalButton(
+                            WorkspaceButton(
                               onPress: widget.busy ? null : widget.onEdit,
                               variant: FButtonVariant.outline,
+                              prefix: const Icon(FLucideIcons.pencil, size: 14),
                               child: const Text('Edit plan'),
                             ),
                           if (p.needsReview)
-                            ClinicalButton(
+                            WorkspaceButton(
                               onPress: widget.busy || p.schedule.isEmpty
                                   ? null
                                   : () => widget.onAction('activate'),
+                              prefix: const Icon(FLucideIcons.check, size: 14),
                               child: Text(
                                 p.status == 'paused'
-                                    ? 'Review & reactivate'
+                                    ? 'Reactivate'
                                     : 'Activate plan',
                               ),
                             ),
                           if (p.status == 'active') ...[
-                            ClinicalButton(
+                            WorkspaceButton(
                               onPress: widget.busy
                                   ? null
                                   : () => widget.onAction('pause'),
                               variant: FButtonVariant.outline,
+                              prefix: const Icon(FLucideIcons.pause, size: 14),
                               child: const Text('Pause'),
                             ),
-                            ClinicalButton(
+                            WorkspaceButton(
                               onPress:
                                   widget.busy ||
                                       patient == null ||
                                       patient.phone.isEmpty
                                   ? null
                                   : () => widget.onAction('call'),
+                              prefix: const Icon(FLucideIcons.phone, size: 14),
                               child: const Text('Call now'),
                             ),
                           ],
                           if (p.status != 'finished')
-                            ClinicalButton(
+                            WorkspaceButton(
                               onPress: widget.busy
                                   ? null
                                   : () => widget.onAction('finish'),
@@ -141,81 +152,92 @@ class _PlanDetailState extends State<PlanDetail> {
             ],
           ),
         ),
-        if (p.status == 'draft')
-          const Padding(
-            padding: EdgeInsets.only(bottom: 16),
-            child: Text(
-              'Draft · Review instructions, tracking and schedule. No calls until you activate.',
-            ),
-          ),
-        _section('Doctor instructions', SelectableText(p.instructions)),
-        if (p.schedule.isEmpty)
-          const Padding(
-            padding: EdgeInsets.only(bottom: 16),
-            child: Text(
-              'Set the call schedule in Edit plan before activating.',
-            ),
-          ),
-        if (p.context.isNotEmpty)
-          _section('AI interpretation · context', SelectableText(p.context)),
         _section(
-          'AI interpretation · tracking plan',
+          'Doctor instructions',
           Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
-                'Derived from your instructions. To correct the interpretation, edit your instructions and review the regenerated plan.',
-              ),
-              const SizedBox(height: 12),
-              _lines(
-                p.trackedItems
-                    .map(
-                      (item) =>
-                          '${item.label}${item.unit == null ? '' : ' (${item.unit})'}${item.options.isEmpty ? '' : ' · ${item.options.join(', ')}'}',
-                    )
-                    .toList(),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Suggested questions',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              _lines(p.strings('questions')),
-            ],
-          ),
-        ),
-        _section(
-          'Photos & schedule',
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Photos: ${switch (p.photoPolicy) {
-                  'first_call' => 'First call',
-                  'every_call' => 'Every call',
-                  _ => 'None',
-                }}',
+              SelectableText(
+                p.instructions,
+                style: const TextStyle(fontSize: 13, height: 1.5),
               ),
               const SizedBox(height: 10),
-              Text(
-                '${_value(p.schedule['frequency'])} at ${_value(p.schedule['local_time'])} · ${_value(p.schedule['timezone'])}',
-              ),
-              Text(
-                '${_value(p.schedule['start_date'])} → ${_value(p.schedule['end_date'])}',
-              ),
-              const SizedBox(height: 10),
+              if (p.schedule.isEmpty)
+                const Text(
+                  'Set a call schedule in Edit plan before activating.',
+                  style: TextStyle(fontSize: 12),
+                )
+              else
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 4,
+                  children: [
+                    Text(
+                      '${_value(p.schedule['frequency'])} · ${_value(p.schedule['local_time'])} ${_value(p.schedule['timezone'])}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    Text(
+                      '${_value(p.schedule['start_date'])} → ${_value(p.schedule['end_date'])}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    Text(
+                      'Photos: ${switch (p.photoPolicy) {
+                        'first_call' => 'First call',
+                        'every_call' => 'Every call',
+                        _ => 'None',
+                      }}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              const SizedBox(height: 8),
               Text(
                 'Next call: ${p.data['next_call_at'] == null ? 'Not scheduled' : utcTimestamp(p.data['next_call_at'])}',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF62766F)),
+              ),
+              Disclosure(
+                title: const Text('Review AI interpretation'),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (p.context.isNotEmpty) ...[
+                      SelectableText(p.context),
+                      const SizedBox(height: 10),
+                    ],
+                    const Text(
+                      'Tracking',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    for (final item in p.trackedItems)
+                      Text(
+                        '• ${item.label}${item.unit == null ? '' : ' (${item.unit})'}${item.options.isEmpty ? '' : ' · ${item.options.join(', ')}'}',
+                      ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Questions',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    for (final question in p.strings('questions'))
+                      Text('• $question'),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Correct the instructions to regenerate this interpretation. Activation requires your review.',
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
         ),
         Padding(
-          padding: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.only(bottom: 12),
           child: PlanResults(plan: p),
         ),
         _section(
-          'Per-call history · AI summaries',
+          'Call history',
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -223,32 +245,26 @@ class _PlanDetailState extends State<PlanDetail> {
                 Text(
                   p.data['last_summary'] == null
                       ? 'No call results available.'
-                      : 'Latest summary: ${p.data['last_summary']}',
+                      : 'Latest AI summary: ${p.data['last_summary']}',
                 ),
               for (final call in p.calls)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 20),
-                  child: ExpansionTile(
-                    title: Text(
-                      '${utcTimestamp(call['started_at'] ?? call['created_at'])} · ${call['status'] ?? 'Status not provided'}',
-                    ),
-                    expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                Disclosure(
+                  title: Text(
+                    '${utcTimestamp(call['started_at'] ?? call['created_at'])} · ${call['status'] ?? 'Status not provided'}',
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const SizedBox(height: 8),
                       SelectableText('AI summary: ${_value(call['summary'])}'),
                       if (call['results'] != null)
                         SelectableText(
                           'AI interpretation: ${_value(call['results'])}',
                         ),
-                      if (call['tracked_answers'] != null)
-                        SelectableText(
-                          'Tracked answers: ${_value(call['tracked_answers'])}',
-                        ),
                       if (call['concerns'] != null)
                         SelectableText('Concerns: ${_value(call['concerns'])}'),
                       if (call['photos'] != null)
                         SelectableText('Photos: ${_value(call['photos'])}'),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       const Text(
                         'Patient-reported observations',
                         style: TextStyle(fontWeight: FontWeight.w600),

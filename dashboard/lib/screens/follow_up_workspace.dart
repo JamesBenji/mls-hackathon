@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:forui/forui.dart';
-import '../app.dart' show teal, ink;
 import '../models/follow_up_plan.dart';
 import '../services/plan_api.dart';
-import '../widgets/clinical_widgets.dart';
+import '../widgets/workspace_widgets.dart';
 import 'plan_detail.dart';
 import 'plan_editor.dart';
 
@@ -29,13 +28,38 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
   bool _loading = true, _busy = false, _confirming = false;
   String? _error, _notice;
   String _tab = 'Active', _search = '';
-  int _selectionVersion = 0;
+  final _masterScroll = ScrollController();
+  final _detailScroll = ScrollController();
+  final _mobileScroll = ScrollController();
   @override
   void initState() {
     super.initState();
-    if (widget.sample) _tab = 'Needs review';
     _load();
   }
+
+  @override
+  void dispose() {
+    _masterScroll.dispose();
+    _detailScroll.dispose();
+    _mobileScroll.dispose();
+    super.dispose();
+  }
+
+  bool _matches(FollowUpPlan p, String tab) => tab == 'Active'
+      ? p.status == 'active'
+      : tab == 'Finished'
+      ? p.status == 'finished'
+      : p.needsReview;
+  List<FollowUpPlan> get _visible => _plans
+      .where(
+        (p) =>
+            _matches(p, _tab) &&
+            '${p.name} ${p.instructions}'.toLowerCase().contains(
+              _search.toLowerCase(),
+            ),
+      )
+      .toList();
+  bool get _locked => _loading || _busy;
 
   Future<void> _load() async {
     setState(() {
@@ -49,6 +73,9 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
         _plans = plans;
         _loading = false;
       });
+      if (_selected == null && _visible.isNotEmpty) {
+        await _select(_visible.first);
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -59,17 +86,21 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
     }
   }
 
+  Future<void> _refresh() async {
+    await _load();
+    if (mounted && _selected != null) await _select(_selected!);
+  }
+
   Future<void> _select(FollowUpPlan p) async {
-    final version = ++_selectionVersion;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       final plan = await widget.api.plan(p.id);
-      if (mounted && version == _selectionVersion) {
-        setState(() => _selected = plan);
-      }
+      if (!mounted) return;
+      setState(() => _selected = plan);
+      if (_detailScroll.hasClients) _detailScroll.jumpTo(0);
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     } finally {
@@ -77,51 +108,40 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
     }
   }
 
+  void _switchTab(String tab) {
+    setState(() {
+      _tab = tab;
+      _selected = null;
+      _notice = null;
+    });
+    if (_visible.isNotEmpty) _select(_visible.first);
+  }
+
   Future<void> _action(String action) async {
-    if (_busy || _selected == null) return;
+    if (_locked || _selected == null) return;
     if (['call', 'activate', 'finish'].contains(action)) {
       setState(() {
         _busy = true;
         _confirming = true;
       });
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(
-            action == 'activate'
-                ? 'Activate this plan?'
-                : action == 'finish'
-                ? 'Finish this plan?'
-                : widget.sample
-                ? 'Preview Call now?'
-                : 'Call ${_selected!.name} now?',
-          ),
-          content: Text(
-            action == 'activate'
-                ? '${_selected!.name}\n${_selected!.instructions}\n\n${_selected!.schedule['frequency']} at ${_selected!.schedule['local_time']} · ${_selected!.schedule['timezone']}\n${_selected!.schedule['start_date']} → ${_selected!.schedule['end_date']}\n\n${widget.sample ? 'Sample only — no calls will be placed.' : 'Activation enables scheduled calls. Confirm the full plan is ready.'}'
-                : action == 'finish'
-                ? 'Stop future follow-up for ${_selected!.name}? This plan will move to Finished. A call already in progress is not ended.'
-                : widget.sample
-                ? 'No call will be placed in sample mode.'
-                : 'This requests a real phone call immediately. Confirm the patient and phone number before continuing.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(
-                action == 'activate'
-                    ? 'Confirm activation'
-                    : action == 'finish'
-                    ? 'Finish plan'
-                    : 'Confirm call',
-              ),
-            ),
-          ],
-        ),
+      final p = _selected!;
+      final confirmed = await confirmPlanAction(
+        context,
+        title: action == 'activate'
+            ? 'Activate this plan?'
+            : action == 'finish'
+            ? 'Finish this plan?'
+            : 'Call ${p.name} now?',
+        body: action == 'activate'
+            ? '${p.name}\n${p.instructions}\n\n${p.schedule['frequency']} at ${p.schedule['local_time']} · ${p.schedule['timezone']}\n${p.schedule['start_date']} → ${p.schedule['end_date']}\n\nConfirm you have reviewed the instructions, tracking and schedule.'
+            : action == 'finish'
+            ? 'Finish future follow-up for ${p.name}? A call already in progress is not ended.'
+            : 'Request an additional call to ${p.name}? Confirm the patient and displayed phone number before continuing.',
+        confirmLabel: action == 'activate'
+            ? 'Confirm activation'
+            : action == 'finish'
+            ? 'Finish plan'
+            : 'Confirm call',
       );
       if (!mounted) return;
       setState(() {
@@ -147,10 +167,9 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
             : plan.needsReview
             ? 'Needs review'
             : 'Active';
+        // Do not claim a call was dispatched when the offline implementation did nothing.
         _notice = action == 'call'
-            ? (widget.sample
-                  ? 'Preview only — no call placed.'
-                  : 'Call requested. Refresh for results.')
+            ? (widget.sample ? null : 'Call requested. Refresh for results.')
             : 'Plan updated.';
       });
       await _load();
@@ -162,7 +181,7 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
   }
 
   Future<void> _edit({bool create = false}) async {
-    if (_busy) return;
+    if (_locked) return;
     setState(() => _busy = true);
     final result = await Navigator.of(context).push<FollowUpPlan>(
       MaterialPageRoute(
@@ -189,279 +208,399 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
     if (result != null) await _load();
   }
 
-  Widget _list() {
-    final plans = _plans
-        .where(
-          (p) =>
-              (_tab == 'Active'
-                  ? p.status == 'active'
-                  : _tab == 'Finished'
-                  ? p.status == 'finished'
-                  : p.needsReview) &&
-              '${p.name} ${p.instructions}'.toLowerCase().contains(
-                _search.toLowerCase(),
-              ),
-        )
-        .toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget _brand() => const Row(
+    children: [
+      Icon(FLucideIcons.phone, color: teal, size: 22),
+      SizedBox(width: 10),
+      Text(
+        'medicall',
+        style: TextStyle(fontSize: 23, color: ink, fontWeight: FontWeight.w700),
+      ),
+    ],
+  );
+
+  Widget _sidebar() => Container(
+    width: 176,
+    decoration: const BoxDecoration(
+      color: Colors.white,
+      border: Border(right: BorderSide(color: Color(0xFFDCE8E3))),
+    ),
+    padding: const EdgeInsets.fromLTRB(16, 22, 16, 16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        FTextField(
-          hint: 'Search plans or patients',
-          control: FTextFieldControl.managed(
-            onChange: (v) => setState(() => _search = v.text),
+        _brand(),
+        const SizedBox(height: 32),
+        const Text(
+          'FOLLOW-UP PLANS',
+          style: TextStyle(
+            fontSize: 10,
+            color: Color(0xFF62766F),
+            letterSpacing: 1.2,
+            fontWeight: FontWeight.w600,
           ),
         ),
-        const SizedBox(height: 16),
-        if (_loading)
-          const Center(child: FCircularProgress())
-        else if (plans.isEmpty)
+        const SizedBox(height: 12),
+        for (final (tab, icon) in [
+          ('Active', FLucideIcons.phone),
+          ('Needs review', FLucideIcons.clipboardCheck),
+          ('Finished', FLucideIcons.check),
+        ])
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 32),
-            child: Text(
-              _plans.isEmpty
-                  ? 'No follow-up plans yet. Create a draft to get started.'
-                  : 'No ${_tab.toLowerCase()} plans match.',
-            ),
-          ),
-        for (final p in plans)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: FCard(
-              child: InkWell(
-                onTap: _busy ? null : () => _select(p),
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    border: _selected?.id == p.id
-                        ? const Border(left: BorderSide(color: teal, width: 3))
-                        : null,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.only(bottom: 6),
+            child: SizedBox(
+              width: 144,
+              child: FButton(
+                size: FButtonSizeVariant.sm,
+                variant: _tab == tab
+                    ? FButtonVariant.secondary
+                    : FButtonVariant.ghost,
+                onPress: _locked ? null : () => _switchTab(tab),
+                mainAxisAlignment: MainAxisAlignment.start,
+                child: SizedBox(
+                  width: 116,
+                  child: Row(
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              p.name,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 17,
-                              ),
-                            ),
-                          ),
-                          Text(p.status),
-                        ],
+                      Icon(icon, size: 15),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(tab, style: const TextStyle(fontSize: 12)),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(width: 6),
                       Text(
-                        p.instructions,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                        '${_plans.where((p) => _matches(p, tab)).length}',
+                        style: const TextStyle(fontSize: 12),
                       ),
-                      const SizedBox(height: 12),
-                      Text(
-                        p.data['next_call_at'] == null
-                            ? 'Next call: not scheduled'
-                            : 'Next call: ${utcTimestamp(p.data['next_call_at'])}',
-                      ),
-                      if (p.data['last_summary'] != null)
-                        Text(
-                          '${p.data['last_summary']}',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
                     ],
                   ),
                 ),
               ),
             ),
           ),
+        const Spacer(),
+        if (widget.onDisconnect != null)
+          WorkspaceButton(
+            onPress: _locked ? null : widget.onDisconnect,
+            variant: FButtonVariant.ghost,
+            prefix: const Icon(FLucideIcons.logOut, size: 15),
+            child: const Text('Disconnect'),
+          ),
       ],
-    );
-  }
+    ),
+  );
+
+  Widget _searchField() => FTextField(
+    hint: 'Search patients or instructions',
+    size: FTextFieldSizeVariant.sm,
+    prefixBuilder: (context, style, variants) => const Padding(
+      padding: EdgeInsets.only(left: 10),
+      child: Icon(FLucideIcons.search, size: 15),
+    ),
+    control: FTextFieldControl.managed(
+      onChange: (v) => setState(() => _search = v.text),
+    ),
+  );
+
+  Widget _actions() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      WorkspaceButton(
+        onPress: _locked ? null : _refresh,
+        variant: FButtonVariant.outline,
+        prefix: const Icon(FLucideIcons.refreshCw, size: 14),
+        child: const Text('Refresh'),
+      ),
+      const SizedBox(width: 8),
+      WorkspaceButton(
+        onPress: _locked ? null : () => _edit(create: true),
+        prefix: const Icon(FLucideIcons.plus, size: 14),
+        child: const Text('New plan'),
+      ),
+    ],
+  );
+
+  Widget _toolbar(bool desktop) => Container(
+    color: Colors.white,
+    padding: EdgeInsets.symmetric(horizontal: desktop ? 22 : 16, vertical: 14),
+    child: desktop
+        ? Row(
+            children: [
+              const Text(
+                'Follow-up plans',
+                style: TextStyle(fontSize: 21, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '${_plans.length} plans',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF62766F)),
+              ),
+              const Spacer(),
+              SizedBox(
+                width: MediaQuery.sizeOf(context).width >= 1120 ? 265 : 180,
+                child: _searchField(),
+              ),
+              const SizedBox(width: 16),
+              _actions(),
+            ],
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(child: _brand()),
+                  if (widget.onDisconnect != null)
+                    WorkspaceButton(
+                      onPress: _locked ? null : widget.onDisconnect,
+                      variant: FButtonVariant.ghost,
+                      child: const Text('Disconnect'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Follow-up plans',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  _actions(),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _searchField(),
+              const SizedBox(height: 12),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final tab in ['Active', 'Needs review', 'Finished'])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: WorkspaceButton(
+                          onPress: _locked ? null : () => _switchTab(tab),
+                          variant: _tab == tab
+                              ? FButtonVariant.secondary
+                              : FButtonVariant.ghost,
+                          child: Text(tab),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+  );
+
+  Widget _list() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                _tab,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            Text('${_visible.length}', style: const TextStyle(fontSize: 12)),
+          ],
+        ),
+      ),
+      if (_loading)
+        const Padding(
+          padding: EdgeInsets.all(20),
+          child: Center(child: FCircularProgress()),
+        )
+      else if (_visible.isEmpty)
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            _plans.isEmpty
+                ? 'No plans yet. Create a draft to get started.'
+                : 'No matching plans.',
+          ),
+        ),
+      for (final p in _visible)
+        Semantics(
+          selected: p.id == _selected?.id,
+          child: FTappable(
+            onPress: _locked ? null : () => _select(p),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: p.id == _selected?.id ? mint : Colors.white,
+                border: Border(
+                  left: BorderSide(
+                    color: p.id == _selected?.id ? teal : Colors.transparent,
+                    width: 3,
+                  ),
+                  bottom: const BorderSide(color: Color(0xFFE4ECE8)),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          p.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        p.status,
+                        style: const TextStyle(fontSize: 11, color: teal),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    p.instructions,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, height: 1.4),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    p.data['next_call_at'] == null
+                        ? 'Next call not scheduled'
+                        : utcTimestamp(p.data['next_call_at']),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF62766F),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+    ],
+  );
+
+  Widget _detail() => _selected == null
+      ? const Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('Select a plan to review instructions and results.'),
+        )
+      : PlanDetail(
+          key: ValueKey(_selected!.data),
+          api: widget.api,
+          plan: _selected!,
+          busy: _locked,
+          onAction: _action,
+          onEdit: () => _edit(),
+        );
+
+  Widget _feedback() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (_error != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          child: FAlert(
+            title: const Text('Unable to complete request'),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_error!),
+                const SizedBox(height: 8),
+                WorkspaceButton(
+                  onPress: _locked ? null : _refresh,
+                  variant: FButtonVariant.outline,
+                  child: const Text('Retry / refresh'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      if (_notice != null)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 8),
+          child: Text(_notice!, style: const TextStyle(fontSize: 12)),
+        ),
+      if (_busy && !_confirming) const FProgress(),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) => Scaffold(
     body: SafeArea(
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 1050;
-          final detail = _selected == null
-              ? const SectionCard(
-                  title: 'A clear plan for every call',
-                  child: Text(
-                    'Select a plan to review instructions, timing and call results.',
-                  ),
-                )
-              : PlanDetail(
-                  key: ValueKey(_selected!.data),
-                  api: widget.api,
-                  plan: _selected!,
-                  busy: _busy || _loading,
-                  onAction: _action,
-                  onEdit: () => _edit(),
-                );
-          return Column(
-            children: [
-              Container(
-                color: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 16,
-                ),
-                child: Row(
-                  children: [
-                    const Icon(FLucideIcons.phone, color: teal),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Text(
-                        'medicall',
-                        style: TextStyle(
-                          fontSize: 25,
-                          fontWeight: FontWeight.w700,
-                          color: ink,
+          final desktop = constraints.maxWidth >= 900;
+          if (!desktop) {
+            return Column(
+              children: [
+                _toolbar(false),
+                _feedback(),
+                Expanded(
+                  child: SingleChildScrollView(
+                    controller: _mobileScroll,
+                    child: Column(
+                      children: [
+                        _list(),
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: _detail(),
                         ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _sidebar(),
+              Expanded(
+                child: Column(
+                  children: [
+                    _toolbar(true),
+                    _feedback(),
+                    Expanded(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Container(
+                            width: 272,
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              border: Border(
+                                right: BorderSide(color: Color(0xFFDCE8E3)),
+                              ),
+                            ),
+                            child: SingleChildScrollView(
+                              controller: _masterScroll,
+                              child: _list(),
+                            ),
+                          ),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              controller: _detailScroll,
+                              padding: const EdgeInsets.all(18),
+                              child: _detail(),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    if (widget.sample)
-                      const Flexible(
-                        child: Text(
-                          'Sample · no real calls',
-                          style: TextStyle(color: teal),
-                        ),
-                      ),
-                    if (widget.onDisconnect != null)
-                      TextButton(
-                        onPressed: _busy ? null : widget.onDisconnect,
-                        child: const Text('Disconnect'),
-                      ),
                   ],
-                ),
-              ),
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.all(wide ? 32 : 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Wrap(
-                        alignment: WrapAlignment.spaceBetween,
-                        spacing: 16,
-                        runSpacing: 16,
-                        children: [
-                          const Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Follow-up plans',
-                                style: TextStyle(
-                                  fontSize: 30,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              SizedBox(height: 6),
-                              Text('Set the calls. Decide what to track.'),
-                            ],
-                          ),
-                          Wrap(
-                            spacing: 8,
-                            children: [
-                              ClinicalButton(
-                                onPress: _busy || _loading
-                                    ? null
-                                    : () async {
-                                        await _load();
-                                        if (_selected != null) {
-                                          await _select(_selected!);
-                                        }
-                                      },
-                                variant: FButtonVariant.outline,
-                                child: const Text('Refresh'),
-                              ),
-                              ClinicalButton(
-                                onPress: _busy || _loading
-                                    ? null
-                                    : () => _edit(create: true),
-                                child: const Text('New plan'),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final tab in [
-                            'Active',
-                            'Needs review',
-                            'Finished',
-                          ])
-                            ClinicalButton(
-                              onPress: () => setState(() => _tab = tab),
-                              variant: _tab == tab
-                                  ? FButtonVariant.secondary
-                                  : FButtonVariant.ghost,
-                              child: Text(tab),
-                            ),
-                        ],
-                      ),
-                      if (_error != null)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: FAlert(
-                            title: const Text('Unable to complete request'),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(_error!),
-                                const SizedBox(height: 8),
-                                TextButton(
-                                  onPressed: _busy || _loading
-                                      ? null
-                                      : () async {
-                                          await _load();
-                                          if (_selected != null) {
-                                            await _select(_selected!);
-                                          }
-                                        },
-                                  child: const Text('Retry / refresh'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      if (_notice != null)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: Text(_notice!),
-                        ),
-                      if (_busy && !_confirming)
-                        const Padding(
-                          padding: EdgeInsets.all(8),
-                          child: FProgress(),
-                        ),
-                      const SizedBox(height: 16),
-                      if (wide)
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SizedBox(width: 350, child: _list()),
-                            const SizedBox(width: 24),
-                            Expanded(child: detail),
-                          ],
-                        )
-                      else ...[
-                        _list(),
-                        const SizedBox(height: 24),
-                        detail,
-                      ],
-                    ],
-                  ),
                 ),
               ),
             ],

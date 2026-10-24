@@ -14,6 +14,18 @@ flutter run -d windows --dart-define=SAMPLE_DATA=true
 
 Sample mode constructs only `SamplePlanApi`, which has no HTTP client or network code. Edits, drafts, activation, pause and finish work in memory until restart. **Call now never places a call or adds fabricated call results.** Select Alex Morgan under Needs review for wound pain/redness/photo observations; select Sam Taylor under Active for cough/sleep/free-text breathing observations. Fixtures include multiple calls, numeric trends and missing/unclear answers. They are synthetic sample history, not live results. Regeneration uses a fixed respiratory/wound mapping, not an actual Gemma invocation. No backend, API key, inference service or phone provider is needed. The existing unrelated preview app is not used.
 
+Preview/test disclaimers are intentionally absent from the UI; the launch command is what selects this behavior. Removing those labels does not enable networking or real calling. Call now in sample mode is a no-op and does not claim successful dispatch. All preview history remains synthetic, including its unlabeled patient quotes and completed-call fixtures. The workspace initially opens Active with the first matching plan selected.
+
+## Desktop layout and active control audit
+
+- At 900+ logical pixels: a persistent 176px navigation rail, horizontal title/count/search/action toolbar, 272px master list, and independently scrolling detail pane. At 1280px, Refresh/New plan and detail actions remain compact horizontal buttons, not full-width rows. `WorkspaceButton` uses both `IntrinsicWidth` and Forui `mainAxisSize: min`; only sidebar choices intentionally fill their bounded rail slot.
+- Results use two columns when their own available width permits, otherwise one. The readable AI interpretation is expandable so the instructions and patient-reported trend cards remain the primary hierarchy. Below the desktop breakpoint, status filters scroll horizontally and the list/detail stack in one scrollable page.
+- Verified the rebuilt Windows window at 1280px using a native window capture: persistent rail, intrinsic-width toolbar/action buttons, split panes, two-column result cards and the new launcher icon. The master list's remaining space reflects the small fixture dataset, not stretched controls.
+- Active graph: `main.dart` → `medicall_app.dart` → `follow_up_workspace.dart`, `plan_detail.dart`, `plan_editor.dart`, `plan_results.dart`, `workspace_widgets.dart`. It does **not** import `app.dart` or `clinical_widgets.dart`.
+- Direct active interactive controls: Forui `FTextField`/`FTextFormField`, `FSelect`, `FButton`, `FTappable`, `FDialog`/`showFDialog`, `FAccordion`, and `FProgress`/`FCircularProgress`. There are no direct Material text fields, dropdowns, checkboxes, dialogs, expansion tiles, snackbars or progress indicators on these routes. MaterialApp/Scaffold/route hosting and Flutter layout/rendering primitives remain; the chart is a CustomPainter with a keyboard-accessible Forui disclosure/table alternative.
+- Isolated legacy libraries retained without broad refactoring: `app.dart`, `screens/dashboard_screen.dart`, `patient_detail_screen.dart`, `clinical_tools.dart`, `record_editor.dart`, `triage_panel.dart`, `widgets/clinical_widgets.dart`, and their old models/API/tests. They are not routes or a second executable entrypoint in the default app. Their old Material controls are not part of the active widget tree.
+- Windows/Web launcher assets are the parent-generated Medicall branding files, included unchanged. Windows FileDescription/ProductName are Medicall. No patient-app or backend assets are changed here.
+
 ## Backend session
 
 ```sh

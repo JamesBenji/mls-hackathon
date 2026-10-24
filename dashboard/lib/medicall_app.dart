@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:forui/forui.dart';
 import 'package:http/http.dart' as http;
-import 'app.dart' show teal, ink, mint;
 import 'screens/follow_up_workspace.dart';
 import 'services/plan_api.dart';
 import 'services/sample_plan_api.dart';
-import 'widgets/clinical_widgets.dart';
+import 'widgets/workspace_widgets.dart';
 
 const sampleData = bool.fromEnvironment('SAMPLE_DATA');
 
@@ -113,11 +112,9 @@ class _SessionScreenState extends State<SessionScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    TextFormField(
-                      controller: _server,
-                      decoration: const InputDecoration(
-                        labelText: 'Server address',
-                      ),
+                    FTextFormField(
+                      control: FTextFieldControl.managed(controller: _server),
+                      label: const Text('Server address'),
                       validator: (v) {
                         final uri = Uri.tryParse(v?.trim() ?? '');
                         return uri == null ||
@@ -129,37 +126,42 @@ class _SessionScreenState extends State<SessionScreen> {
                             : null;
                       },
                     ),
-                    TextFormField(
-                      controller: _key,
+                    const SizedBox(height: 16),
+                    FTextFormField(
+                      control: FTextFieldControl.managed(controller: _key),
                       obscureText: true,
-                      decoration: const InputDecoration(labelText: 'API key'),
+                      label: const Text('API key'),
                       validator: (v) => v == null || v.trim().isEmpty
                           ? 'Enter the server API key.'
                           : null,
                     ),
-                    TextFormField(
-                      controller: _doctor,
-                      decoration: const InputDecoration(labelText: 'Doctor ID'),
+                    const SizedBox(height: 16),
+                    FTextFormField(
+                      control: FTextFieldControl.managed(controller: _doctor),
+                      label: const Text('Doctor ID'),
                       keyboardType: TextInputType.number,
                       validator: (v) => (int.tryParse(v ?? '') ?? 0) <= 0
                           ? 'Enter a positive doctor ID.'
                           : null,
                     ),
                     const SizedBox(height: 24),
-                    ClinicalButton(
-                      onPress: () {
-                        if (!_form.currentState!.validate()) return;
-                        setState(() {
-                          _doctorId = int.parse(_doctor.text);
-                          _client = http.Client();
-                          _api = HttpPlanApi(
-                            client: _client!,
-                            baseUrl: _server.text.trim(),
-                            apiKey: _key.text.trim(),
-                          );
-                        });
-                      },
-                      child: const Text('Connect'),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: WorkspaceButton(
+                        onPress: () {
+                          if (!_form.currentState!.validate()) return;
+                          setState(() {
+                            _doctorId = int.parse(_doctor.text);
+                            _client = http.Client();
+                            _api = HttpPlanApi(
+                              client: _client!,
+                              baseUrl: _server.text.trim(),
+                              apiKey: _key.text.trim(),
+                            );
+                          });
+                        },
+                        child: const Text('Connect'),
+                      ),
                     ),
                     const SizedBox(height: 16),
                     const Text(

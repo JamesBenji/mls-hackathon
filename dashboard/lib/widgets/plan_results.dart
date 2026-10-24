@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import '../app.dart' show teal;
 import '../models/follow_up_plan.dart';
-import 'clinical_widgets.dart';
+import 'workspace_widgets.dart';
 
 class PlanResults extends StatelessWidget {
   final FollowUpPlan plan;
@@ -9,19 +8,26 @@ class PlanResults extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SectionCard(
     title: 'Patient-reported tracking',
-    subtitle:
-        'Reported answers, not AI conclusions. Missing answers stay missing. Expand a row for the source and call context.',
-    child: Material(
-      color: Colors.transparent,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (plan.resultItems.isEmpty)
-            const Text('No tracking items have been derived yet.'),
-          for (final item in plan.resultItems)
-            _TrackingResult(plan: plan, item: item),
-        ],
-      ),
+    subtitle: 'Expand an observation for its source quote and call context.',
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth >= 640
+            ? (constraints.maxWidth - 12) / 2
+            : constraints.maxWidth;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            if (plan.resultItems.isEmpty)
+              const Text('No tracking items have been derived yet.'),
+            for (final item in plan.resultItems)
+              SizedBox(
+                width: width,
+                child: _TrackingResult(plan: plan, item: item),
+              ),
+          ],
+        );
+      },
     ),
   );
 }
@@ -47,62 +53,57 @@ class _TrackingResult extends StatelessWidget {
         : currentRevision != null && !current
         ? 'No observations for the current plan revision'
         : '${current ? 'Latest' : 'Latest available · revision ${latest.revision}'}: ${latest.valueLabel}${latest.status == 'reported' && latest.unit != null ? ' ${latest.unit}' : ''}';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
-      child: Material(
+    return DecoratedBox(
+      decoration: BoxDecoration(
         color: const Color(0xFFF5F8F6),
-        shape: RoundedRectangleBorder(
-          side: const BorderSide(color: Color(0xFFDCE8E3)),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                item.label,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
+        border: Border.all(color: const Color(0xFFDCE8E3)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              item.label,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              latestLabel,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            if (latest != null && (current || currentRevision == null)) ...[
+              Text('Reported: ${latest.reportedAt}'),
+              Text('Measured: ${latest.measuredAt}'),
+            ],
+            if (item.type == 'photo')
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  'Attachment metadata only. Image content / authorized preview is not available from this API.',
                 ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                latestLabel,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              if (latest != null && (current || currentRevision == null)) ...[
-                Text('Reported: ${latest.reportedAt}'),
-                Text('Measured: ${latest.measuredAt}'),
-              ],
-              if (item.type == 'photo')
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    'Attachment metadata only. Image content / authorized preview is not available from this API.',
-                  ),
-                ),
-              for (final group in series)
-                Padding(
-                  padding: const EdgeInsets.only(top: 14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        '${group.item.label} · revision ${group.revision} · ${group.unit ?? 'no unit'}',
-                        style: const TextStyle(fontWeight: FontWeight.w500),
+            for (final group in series)
+              Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Revision ${group.revision} · ${group.unit ?? 'no unit'}',
+                      style: const TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                    if (group.item.type == 'number' &&
+                        group.revision != 'unknown')
+                      NumericObservationChart(series: group),
+                    Disclosure(
+                      title: Text(
+                        group.item.type == 'number'
+                            ? 'Observation table & sources'
+                            : 'Timeline & sources',
                       ),
-                      if (group.item.type == 'number' &&
-                          group.revision != 'unknown')
-                        NumericObservationChart(series: group),
-                      ExpansionTile(
-                        tilePadding: EdgeInsets.zero,
-                        title: Text(
-                          group.item.type == 'number'
-                              ? 'Observation table & sources'
-                              : 'Timeline & sources',
-                        ),
+                      child: Column(
                         children: [
                           for (final observation in group.observations.where(
                             group.compatible,
@@ -110,14 +111,14 @@ class _TrackingResult extends StatelessWidget {
                             ObservationRow(observation: observation),
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              if (series.isEmpty)
-                const Text('Waiting for the first reported answer.'),
-              const SizedBox(height: 4),
-            ],
-          ),
+              ),
+            if (series.isEmpty)
+              const Text('Waiting for the first reported answer.'),
+            const SizedBox(height: 4),
+          ],
         ),
       ),
     );
@@ -135,19 +136,20 @@ class ObservationRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final o = observation;
-    return ExpansionTile(
+    return Disclosure(
       initiallyExpanded: initiallyExpanded,
       title: Text(
         '${o.definition?.label ?? o.itemId}: ${o.valueLabel}${o.status == 'reported' && o.unit != null ? ' ${o.unit}' : ''}',
       ),
-      subtitle: Text('Reported: ${o.reportedAt}'),
-      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      expandedCrossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SelectableText('Patient source: “${o.quote}”'),
-        Text('Measured: ${o.measuredAt}'),
-        Text('Call: ${o.callId} · revision ${o.revision} · ${o.status}'),
-      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Reported: ${o.reportedAt}'),
+          SelectableText('Patient source: “${o.quote}”'),
+          Text('Measured: ${o.measuredAt}'),
+          Text('Call: ${o.callId} · revision ${o.revision} · ${o.status}'),
+        ],
+      ),
     );
   }
 }

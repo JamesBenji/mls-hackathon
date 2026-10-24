@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:forui/forui.dart';
 import '../models/follow_up_plan.dart';
 import '../services/plan_api.dart';
-import '../widgets/clinical_widgets.dart';
+import '../widgets/workspace_widgets.dart';
 
 class PlanEditor extends StatefulWidget {
   final PlanApi api;
@@ -77,16 +78,12 @@ class _PlanEditorState extends State<PlanEditor> {
 
   Widget _field(String key, String label, {int lines = 1}) => Padding(
     padding: const EdgeInsets.only(bottom: 18),
-    child: TextFormField(
-      controller: _fields[key],
+    child: FTextFormField(
+      control: FTextFieldControl.managed(controller: _fields[key]),
       enabled: !_busy,
       minLines: lines,
       maxLines: lines == 1 ? 1 : lines + 3,
-      decoration: InputDecoration(
-        labelText: label,
-        alignLabelWithHint: true,
-        border: const OutlineInputBorder(),
-      ),
+      label: Text(label),
       validator: (v) {
         final value = (v ?? '').trim();
         if (value.isEmpty) return 'Required';
@@ -158,12 +155,6 @@ class _PlanEditorState extends State<PlanEditor> {
   Widget build(BuildContext context) => PopScope(
     canPop: !_busy,
     child: Scaffold(
-      appBar: AppBar(
-        title: Text(
-          _creating ? 'New follow-up plan' : 'Edit instructions & schedule',
-        ),
-        automaticallyImplyLeading: !_busy,
-      ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 780),
@@ -174,40 +165,56 @@ class _PlanEditorState extends State<PlanEditor> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    widget.sample
-                        ? 'Sample preview uses fixed instruction mappings, not a running Gemma model. Describe the follow-up; review the sample interpretation before activating.'
-                        : 'Describe what to follow up in your own words. Gemma derives the tracking items and questions. Review the interpretation before activating.',
+                  Row(
+                    children: [
+                      WorkspaceButton(
+                        onPress: _busy ? null : () => Navigator.pop(context),
+                        variant: FButtonVariant.ghost,
+                        prefix: const Icon(FLucideIcons.arrowLeft, size: 16),
+                        child: const Text('Back'),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _creating
+                              ? 'New follow-up plan'
+                              : 'Edit instructions & schedule',
+                          style: const TextStyle(
+                            fontSize: 21,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Describe the follow-up in your own words. Review the derived tracking items and questions before activating.',
                   ),
                   const SizedBox(height: 24),
                   if (_creating) ...[
                     if (_loading)
-                      const LinearProgressIndicator()
+                      const FProgress()
                     else
-                      DropdownButtonFormField<int>(
-                        initialValue: _patientId,
-                        isExpanded: true,
-                        decoration: const InputDecoration(labelText: 'Patient'),
-                        items: _patients
-                            .map(
-                              (p) => DropdownMenuItem(
-                                value: p.id,
-                                child: Text(
-                                  '${p.name} · ${p.phone.isEmpty ? 'Phone unavailable' : p.phone}',
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: _busy
-                            ? null
-                            : (v) => setState(() => _patientId = v),
+                      FSelect<int>(
+                        label: const Text('Patient'),
+                        hint: 'Select a patient',
+                        enabled: !_busy,
+                        control: FSelectControl.lifted(
+                          value: _patientId,
+                          onChange: (v) => setState(() => _patientId = v),
+                        ),
+                        items: {
+                          for (final p in _patients)
+                            '${p.name} · ${p.phone.isEmpty ? 'Phone unavailable' : p.phone} · #${p.id}':
+                                p.id,
+                        },
                         validator: (v) =>
                             v == null ? 'Select a patient.' : null,
                       ),
                     if (!_loading && _patients.isEmpty)
-                      TextButton(
-                        onPressed: _loadPatients,
+                      WorkspaceButton(
+                        onPress: _loadPatients,
                         child: const Text('No patients available · Retry'),
                       ),
                     const SizedBox(height: 24),
@@ -220,16 +227,16 @@ class _PlanEditorState extends State<PlanEditor> {
                     const SizedBox(height: 24),
                     _field('timezone', 'Timezone · e.g. America/New_York'),
                     _field('local_time', 'Call time · HH:mm'),
-                    DropdownButtonFormField<String>(
-                      initialValue: _frequency,
-                      decoration: const InputDecoration(labelText: 'Frequency'),
-                      items: const [
-                        DropdownMenuItem(value: 'once', child: Text('Once')),
-                        DropdownMenuItem(value: 'daily', child: Text('Daily')),
-                      ],
-                      onChanged: _busy
-                          ? null
-                          : (v) => setState(() => _frequency = v!),
+                    FSelect<String>(
+                      label: const Text('Frequency'),
+                      enabled: !_busy,
+                      items: const {'Once': 'once', 'Daily': 'daily'},
+                      control: FSelectControl.lifted(
+                        value: _frequency,
+                        onChange: (v) {
+                          if (v != null) setState(() => _frequency = v);
+                        },
+                      ),
                     ),
                     const SizedBox(height: 24),
                     _field('start_date', 'Start date · YYYY-MM-DD'),
@@ -240,11 +247,14 @@ class _PlanEditorState extends State<PlanEditor> {
                       padding: const EdgeInsets.only(bottom: 16),
                       child: SelectableText(_error!),
                     ),
-                  if (_busy) const LinearProgressIndicator(),
+                  if (_busy) const FProgress(),
                   const SizedBox(height: 16),
-                  ClinicalButton(
-                    onPress: _busy || _loading ? null : _save,
-                    child: Text(_creating ? 'Create draft' : 'Save changes'),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: WorkspaceButton(
+                      onPress: _busy || _loading ? null : _save,
+                      child: Text(_creating ? 'Create draft' : 'Save changes'),
+                    ),
                   ),
                 ],
               ),

@@ -28,8 +28,9 @@ class SamplePlanApi implements PlanApi {
       caseSensitive: false,
     ).hasMatch(instructions);
     return {
-      'context':
-          'Sample interpretation from a fixed ${respiratory ? 'respiratory' : 'wound'} mapping. No Gemma model runs in this preview.',
+      'context': respiratory
+          ? 'Follow-up on cough, sleep quality and changes in breathing.'
+          : 'Follow-up on wound pain, redness and the requested wound photo.',
       'questions': respiratory
           ? [
               'How many coughing episodes?',
@@ -85,15 +86,15 @@ class SamplePlanApi implements PlanApi {
     final calls = <PlanJson>[];
     for (var i = 0; i < 5; i++) {
       final at = '2026-10-${20 + i}T13:00:00';
-      final callId = 'sample-$id-$i';
+      final callId = 'call-$id-$i';
       calls.add({
         'id': callId,
         'call_session_id': callId,
         'started_at': at,
-        'status': 'completed (sample)',
+        'status': 'completed',
         'summary': i == 2
-            ? 'Sample: one numeric answer was not reported.'
-            : 'Sample: follow-up answers recorded; review the source quotes.',
+            ? 'One numeric answer was not reported.'
+            : 'Follow-up answers recorded; review the source quotes.',
         'concerns': [],
       });
       for (final raw in interpretation['tracked_items'] as List) {
@@ -127,10 +128,10 @@ class SamplePlanApi implements PlanApi {
               ? 'declined'
               : 'reported',
           'source_quote': missing
-              ? 'Sample: I did not keep count today.'
+              ? 'I did not keep count today.'
               : item['type'] == 'photo'
-              ? 'Sample: I cannot send a photo right now.'
-              : 'Sample patient answer: $value',
+              ? 'I cannot send a photo right now.'
+              : '$value',
           'reported_at': at,
           'measured_at': item['type'] == 'number' && !missing
               ? '2026-10-${20 + i}T12:30:00'
@@ -141,15 +142,15 @@ class SamplePlanApi implements PlanApi {
     // The latest missing answer must not be replaced with an earlier value.
     if (id == 2) {
       observations.add({
-        'id': 'sample-2-latest-missing',
+        'id': 'call-2-latest-missing',
         'item_id': 'cough',
         'plan_revision': 1,
         'definition_snapshot': (interpretation['tracked_items'] as List).first,
-        'call_session_id': 'sample-2-latest',
+        'call_session_id': 'call-2-latest',
         'value': null,
         'unit': 'episodes',
         'status': 'unclear',
-        'source_quote': 'Sample: I am not sure how often today.',
+        'source_quote': 'I am not sure how often today.',
         'reported_at': '2026-10-24T16:00:00',
         'measured_at': null,
       });
