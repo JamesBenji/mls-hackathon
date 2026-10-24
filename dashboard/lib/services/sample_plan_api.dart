@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import '../models/follow_up_plan.dart';
 import 'plan_api.dart';
 
@@ -5,7 +6,7 @@ import 'plan_api.dart';
 /// Interpretation regeneration is a static mapping, not a Gemma invocation.
 class SamplePlanApi implements PlanApi {
   final Map<int, FollowUpPlan> _plans = {};
-  final List<PlanPatient> identities = const [
+  final List<PlanPatient> identities = [
     PlanPatient(1, 'Alex Morgan', '+1 202 555 0142', 'America/New_York'),
     PlanPatient(2, 'Sam Taylor', '+1 202 555 0189', 'America/New_York'),
   ];
@@ -20,6 +21,27 @@ class SamplePlanApi implements PlanApi {
       'Call daily to track cough episodes, sleep quality and how breathing feels in the patient’s own words.',
       'active',
     );
+  }
+
+  @override
+  Future<PlanPatient> createPatient(
+    int doctorId,
+    String name,
+    String phone,
+  ) async {
+    final patient = PlanPatient(identities.length + 1, name, phone, '');
+    identities.add(patient);
+    return patient;
+  }
+
+  @override
+  Future<PlanJson> pairPatient(int doctorId, int patientId) async {
+    throw const PlanApiException('Connect to the care server to pair a phone.');
+  }
+
+  @override
+  Future<Uint8List> photoBytes(int planId, String photoId) async {
+    throw const PlanApiException('Photo content is not available.');
   }
 
   PlanJson _interpret(String instructions) {
@@ -230,8 +252,10 @@ class SamplePlanApi implements PlanApi {
   }
 
   @override
-  Future<void> action(int id, String action) async {
-    if (action == 'call') return; // Never places or fabricates another call.
+  Future<PlanJson?> action(int id, String action, {PlanJson? body}) async {
+    if (action == 'call') {
+      return null; // Never places or fabricates another call.
+    }
     final status = {
       'activate': 'active',
       'pause': 'paused',
@@ -241,5 +265,6 @@ class SamplePlanApi implements PlanApi {
       throw const PlanApiException('Unsupported preview action.');
     }
     _plans[id] = FollowUpPlan({..._plans[id]!.data, 'status': status});
+    return null;
   }
 }

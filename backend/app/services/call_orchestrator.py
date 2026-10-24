@@ -178,7 +178,8 @@ async def question_plan_for(db: Session, patient_id: int) -> QuestionPlan:
 # --- outbound calls ------------------------------------------------------------
 
 async def start_call(db: Session, patient_id: int, *, call_job_id: int | None = None,
-                     follow_up_plan_id: int | None = None) -> dict:
+                     follow_up_plan_id: int | None = None,
+                     one_off_approval: dict | None = None) -> dict:
     patient = db.get(models.Patient, patient_id)
     if patient is None:
         raise LookupError(f"patient {patient_id} not found")
@@ -196,24 +197,38 @@ async def start_call(db: Session, patient_id: int, *, call_job_id: int | None = 
         import secrets
         approved = db.scalar(select(FollowUpPlan).where(FollowUpPlan.id == follow_up_plan_id)
                              .execution_options(populate_existing=True).with_for_update())
-        if (approved is None or approved.status != "active" or approved.patient_id != patient_id
+        allowed_statuses = ("active", "paused", "draft") if one_off_approval else ("active",)
+        if (approved is None or approved.status not in allowed_statuses or approved.patient_id != patient_id
                 or approved.doctor_id != patient.doctor_id):
             db.rollback()
             raise CallStartError("Plan is not active for this patient")
+        if one_off_approval and approved.revision != one_off_approval["revision"]:
+            db.rollback()
+            raise CallStartError("Plan changed; review it again before calling")
+        snapshot = {key: getattr(approved, key) for key in (
+            "instructions", "context", "questions", "tracked_items", "photo_policy", "revision")}
+        if one_off_approval:
+            snapshot["one_off_approval"] = one_off_approval
         prior = db.scalar(select(PlanCall.session_id).where(PlanCall.plan_id == approved.id))
         db.add(PlanCall(session_id=session.id, plan_id=approved.id,
                        photo_request_key=secrets.token_hex(24),
                        photo_allowed=approved.photo_policy == "every_call" or (
                            approved.photo_policy == "first_call" and prior is None),
-                       approved_context={key: getattr(approved, key) for key in (
-                           "instructions", "context", "questions", "tracked_items", "photo_policy", "revision")}))
+                        approved_context=snapshot))
         db.flush()
     try:
         variables, plan = await context_builder.build_dynamic_variables(
             db, session, resume_from="start")
-        result = await elevenlabs.place_outbound_call(patient.phone, variables)
+        if one_off_approval:
+            result = await elevenlabs.place_outbound_call(
+                patient.phone, variables,
+                max_duration_seconds=one_off_approval["max_duration_seconds"],
+                branch_id=settings.eleven_immediate_call_branch_id,
+            )
+        else:
+            result = await elevenlabs.place_outbound_call(patient.phone, variables)
     except Exception as exc:
-        session.status = "failed"
+        session.status = "dispatch_unknown" if one_off_approval else "failed"
         session.last_error = type(exc).__name__
         db.commit()
         log.error("call start failed for patient %s (session %s): %s",
@@ -257,7 +272,8 @@ async def resume_call(db: Session, session_id: int) -> dict | None:
         return None
     from app.followups import FollowUpPlan, PlanCall
     linked = db.get(PlanCall, session.id)
-    if linked and db.get(FollowUpPlan, linked.plan_id).status != "active":
+    if linked and (linked.approved_context.get("one_off_approval")
+                   or db.get(FollowUpPlan, linked.plan_id).status != "active"):
         session.status, session.callback_at = "cancelled", None
         db.commit()
         return None
@@ -342,6 +358,8 @@ async def schedule_callback(db: Session, session: models.CallSession, *,
         raise ValueError("cannot call back an unknown caller")
     from app.followups import FollowUpPlan, PlanCall
     linked = db.get(PlanCall, session.id)
+    if linked and linked.approved_context.get("one_off_approval"):
+        raise ValueError("This call was approved for one attempt only; callbacks are disabled")
     if linked and db.get(FollowUpPlan, linked.plan_id).status != "active":
         raise ValueError("Follow-up plan is not active")
     mins = _coerce_minutes(minutes)
@@ -419,6 +437,13 @@ async def _handle_missed(db: Session, session: models.CallSession, reason: str,
     """Missed call / voicemail: SMS + retry later, or give up at the cap."""
     from app.followups import FollowUpPlan, PlanCall
     linked = db.get(PlanCall, session.id)
+    if linked and linked.approved_context.get("one_off_approval"):
+        session.status = "missed"
+        session.last_error = reason[:_MAX_ERROR_CHARS] if reason else None
+        session.callback_at = None
+        _cancel_resume(session.id)
+        db.commit()
+        return {"missed": True, "retry_scheduled": False}
     if linked and db.get(FollowUpPlan, linked.plan_id).status != "active":
         session.status, session.callback_at = "cancelled", None
         _cancel_resume(session.id)

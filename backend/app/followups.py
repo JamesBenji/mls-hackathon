@@ -104,6 +104,15 @@ class DraftOutput(BaseModel):
     clarification: str | None = None
 
 
+class ImmediateCallIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approved: Literal[True]
+    revision: int = Field(ge=1)
+    expected_phone: str = Field(min_length=7, max_length=32)
+    request_key: str = Field(min_length=16, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+    max_duration_seconds: int | None = Field(default=None, ge=15, le=3600)
+
+
 class PlanPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     instructions: str | None = Field(default=None, min_length=1, max_length=5000)
@@ -138,7 +147,11 @@ def plan_out(db, plan, *, detail=False):
         report = db.scalar(select(models.CallReport).where(
             models.CallReport.call_session_id == call.id
         ).order_by(models.CallReport.id.desc()))
+        attempt = db.scalar(select(models.CallAttempt).where(
+            models.CallAttempt.call_session_id == call.id,
+        ).order_by(models.CallAttempt.id.desc()))
         results.append({"id": call.id, "call_session_id": call.id, "status": call.status,
+                        "mock": attempt is not None and attempt.status == "mock",
                         "started_at": call.started_at, "summary": report.summary if report else None,
                         "results": report.structured_data if report else None})
     out = {key: getattr(plan, key) for key in (
@@ -147,8 +160,23 @@ def plan_out(db, plan, *, detail=False):
     out["patient_name"] = db.get(models.Patient, plan.patient_id).name
     out["last_summary"] = next((r["summary"] for r in results if r["summary"]), None)
     if detail:
+        from app.photos.routes import request_out
+        from app.photos.models import PhotoRequest
+        from app.photos.tools import ToolPhotoRequest
+
         out["calls"] = results
         out["observations"] = observations_out(db, plan.id)
+        requests = db.scalars(select(PhotoRequest).join(
+            ToolPhotoRequest, ToolPhotoRequest.request_id == PhotoRequest.id,
+        ).join(PlanCall, PlanCall.session_id == ToolPhotoRequest.session_id).where(
+            PlanCall.plan_id == plan.id,
+        ).order_by(PhotoRequest.created_at.desc())).all()
+        out["photo_requests"] = [request_out(db, request) for request in requests]
+        for result in results:
+            transcript = db.scalar(select(models.Transcription).where(
+                models.Transcription.call_session_id == result["call_session_id"],
+            ).order_by(models.Transcription.id.desc()))
+            result["transcript"] = transcript.text if transcript else None
     return out
 
 
@@ -300,16 +328,101 @@ def finish(plan_id: int, db: Db):
 
 
 @router.post("/{plan_id}/call")
-async def call_now(plan_id: int, db: Db):
-    plan = get_plan(db, plan_id)
-    if plan.status != "active":
-        raise HTTPException(409, "Activate the reviewed plan before calling")
+async def call_now(plan_id: int, body: "ImmediateCallIn", db: Db):
+    plan = db.scalar(select(FollowUpPlan).where(FollowUpPlan.id == plan_id)
+                     .with_for_update())
+    if plan is None:
+        raise HTTPException(404, "Plan not found")
+    if plan.status not in ("active", "paused", "draft"):
+        raise HTTPException(409, "Review and save this plan before approving a single call")
+    if plan.revision != body.revision:
+        raise HTTPException(409, "Plan changed; refresh and review it before calling")
+    patient = db.scalar(select(models.Patient).where(models.Patient.id == plan.patient_id)
+                        .with_for_update())
+    if patient is None or patient.doctor_id != plan.doctor_id:
+        raise HTTPException(409, "Patient association is not valid")
+    from app import phone
+    from app.adapters import elevenlabs
+    from app.config import settings
+    destination = phone.normalize_e164(patient.phone)
+    if not destination:
+        raise HTTPException(422, "Set a valid patient phone number including country code")
+    if phone.normalize_e164(body.expected_phone) != destination:
+        raise HTTPException(409, "Patient phone number changed; confirm the destination again")
+    if not plan.instructions.strip() or not plan.questions:
+        raise HTTPException(422, "Review the plan instructions and questions first")
+    if not elevenlabs.is_mock() and not settings.eleven_immediate_call_branch_id:
+        raise HTTPException(503, "Configure the immediate-call agent branch before dispatching")
+    previous = db.scalars(select(PlanCall).where(PlanCall.plan_id == plan.id)).all()
+    for linked in previous:
+        approval = linked.approved_context.get("one_off_approval", {})
+        if approval.get("request_key") == body.request_key:
+            if (approval.get("revision") != body.revision
+                    or approval.get("expected_phone") != body.expected_phone
+                    or approval.get("max_duration_seconds") != body.max_duration_seconds):
+                raise HTTPException(409, "Request key already used for another call approval")
+            session = db.get(models.CallSession, linked.session_id)
+            response = plan_out(db, plan, detail=True)
+            response["call_dispatch"] = dispatch_out(db, session, body.max_duration_seconds)
+            return response
+    ongoing = db.scalar(select(models.CallSession).where(
+        models.CallSession.patient_id == patient.id,
+        models.CallSession.status.in_(("scheduled", "in_progress", "callback_pending", "dispatch_unknown")),
+    ))
+    if ongoing:
+        raise HTTPException(409, "This patient already has a pending or ongoing call; refresh its status")
     from app.services.call_orchestrator import CallStartError, start_call
     try:
-        await start_call(db, plan.patient_id, follow_up_plan_id=plan.id)
+        result = await start_call(
+            db, plan.patient_id, follow_up_plan_id=plan.id,
+            one_off_approval=body.model_dump(),
+        )
     except CallStartError:
-        raise HTTPException(502, "Call could not be placed") from None
-    return plan_out(db, plan, detail=True)
+        raise HTTPException(502, "Call could not be confirmed. Refresh history before trying again") from None
+    response = plan_out(db, plan, detail=True)
+    response["call_dispatch"] = {
+        **result,
+        "max_duration_seconds": body.max_duration_seconds,
+        "single_attempt": True,
+    }
+    return response
+
+
+@router.get("/{plan_id}/photos/{photo_id}/content")
+def plan_photo_content(plan_id: int, photo_id: str, db: Db):
+    from fastapi.responses import FileResponse
+    from app.photos.models import PhotoAsset
+    from app.photos.storage import private_path
+    from app.photos.tools import ToolPhotoRequest
+
+    plan = get_plan(db, plan_id)
+    photo = db.scalar(select(PhotoAsset).join(
+        ToolPhotoRequest, ToolPhotoRequest.request_id == PhotoAsset.request_id,
+    ).join(PlanCall, PlanCall.session_id == ToolPhotoRequest.session_id).where(
+        PlanCall.plan_id == plan.id, PhotoAsset.id == photo_id,
+        PhotoAsset.patient_id == plan.patient_id,
+    ))
+    if photo is None:
+        raise HTTPException(404, "Photo not found for this plan")
+    path = private_path(photo.storage_key)
+    if not path.is_file():
+        raise HTTPException(404, "Photo is not available")
+    return FileResponse(path, media_type=photo.mime_type,
+                        headers={"Cache-Control": "private, no-store",
+                                 "X-Content-Type-Options": "nosniff"})
+
+
+def dispatch_out(db, session, duration):
+    attempt = db.scalar(select(models.CallAttempt).where(
+        models.CallAttempt.call_session_id == session.id,
+    ).order_by(models.CallAttempt.id.desc()))
+    return {
+        "call_session_id": session.id,
+        "status": session.status,
+        "mock": attempt is not None and attempt.status == "mock",
+        "max_duration_seconds": duration,
+        "single_attempt": True,
+    }
 
 
 def schedule_plan(plan):

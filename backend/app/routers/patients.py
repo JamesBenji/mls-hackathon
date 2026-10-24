@@ -29,6 +29,61 @@ from app.phone import normalize_e164
 
 router = APIRouter(tags=["patients"])
 
+
+class PatientCreate(BaseModel):
+    doctor_id: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=120)
+    phone: str = Field(min_length=7, max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value):
+        if not value.strip():
+            raise ValueError("Enter the patient name")
+        return value.strip()
+
+    @field_validator("phone")
+    @classmethod
+    def valid_phone(cls, value):
+        normalized = normalize_e164(value)
+        if normalized is None:
+            raise ValueError("Include the country code, for example +49")
+        return normalized
+
+
+class PatientPairingIn(BaseModel):
+    doctor_id: int = Field(ge=1)
+
+
+@router.post("/patients", status_code=201)
+def create_patient(body: PatientCreate, db: Session = Depends(get_db)):
+    if db.get(models.Doctor, body.doctor_id) is None:
+        raise HTTPException(404, "Doctor not found")
+    patient = models.Patient(**body.model_dump())
+    db.add(patient)
+    db.commit()
+    db.refresh(patient)
+    return {"id": patient.id, "name": patient.name, "phone": patient.phone,
+            "doctor_id": patient.doctor_id}
+
+
+@router.post("/patients/{patient_id}/pairing-token", status_code=201)
+def issue_patient_pairing(patient_id: int, body: PatientPairingIn,
+                          db: Session = Depends(get_db)):
+    """Trusted service-key operator bootstrap, not identity-bound doctor login."""
+    from app.photos.auth import issue_credential
+
+    patient = _get_patient(db, patient_id)
+    if patient.doctor_id != body.doctor_id:
+        raise HTTPException(404, "Patient not found for this doctor")
+    token, credential = issue_credential(db, "patient", patient.id)
+    expires_at = credential.expires_at
+    db.commit()
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"access_token": token, "patient_id": patient.id,
+                         "expires_at": expires_at.isoformat()},
+                        status_code=201, headers={"Cache-Control": "private, no-store"})
+
 RiskLevel = Literal["low", "medium", "high"]
 VitalType = Literal["bp_systolic", "bp_diastolic", "blood_sugar", "weight", "sleep_hours"]
 DEFAULT_UNITS: dict[str, str] = {

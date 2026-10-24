@@ -60,7 +60,11 @@ def authorize(db, body, authorization):
     if (session.conversation_id != body.conversation_id or session.status != "in_progress"
             or session.patient_id != plan.patient_id or patient.doctor_id != plan.doctor_id):
         raise HTTPException(403, "Session/conversation association is not valid")
-    if plan.status != "active" or not linked.photo_allowed or plan.photo_policy == "none":
+    one_off = linked.approved_context.get("one_off_approval")
+    approved = plan.status == "active" or (
+        plan.status in ("paused", "draft") and one_off and one_off["revision"] == plan.revision
+    )
+    if not approved or not linked.photo_allowed or plan.photo_policy == "none":
         raise HTTPException(403, "Doctor has not approved photos for this call")
     if session.started_at and timeutil.utcnow() - session.started_at > timedelta(hours=4):
         raise HTTPException(401, "Session credential expired")

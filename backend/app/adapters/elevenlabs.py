@@ -122,7 +122,13 @@ def is_mock() -> bool:
 
 # --- outbound calls -------------------------------------------------------------
 
-async def place_outbound_call(to_number: str, dynamic_variables: dict[str, str]) -> dict:
+async def place_outbound_call(
+    to_number: str,
+    dynamic_variables: dict[str, str],
+    *,
+    max_duration_seconds: int | None = None,
+    branch_id: str | None = None,
+) -> dict:
     """Ask ElevenLabs to call `to_number` from the agent's imported Twilio
     number. Returns {"conversation_id", "call_sid", "mock"}."""
     number = phone.normalize_e164(to_number) if isinstance(to_number, str) else None
@@ -130,6 +136,8 @@ async def place_outbound_call(to_number: str, dynamic_variables: dict[str, str])
         raise InvalidCallRequest(
             f"to_number must be E.164 (e.g. +4915112345678), got {_mask_phone(to_number)!r}")
     variables = _prepare_dynamic_variables(dynamic_variables)
+    if max_duration_seconds is not None and not 1 <= max_duration_seconds <= 3600:
+        raise InvalidCallRequest("Call duration override must be between 1 and 3600 seconds")
 
     if is_mock():
         return _mock_call(number, variables)
@@ -140,6 +148,13 @@ async def place_outbound_call(to_number: str, dynamic_variables: dict[str, str])
         "to_number": number,
         "conversation_initiation_client_data": {"dynamic_variables": variables},
     }
+    initiation = payload["conversation_initiation_client_data"]
+    if branch_id:
+        initiation["branch_id"] = branch_id
+    if max_duration_seconds is not None:
+        initiation["conversation_config_override"] = {
+            "conversation": {"max_duration_seconds": max_duration_seconds}
+        }
     url = settings.eleven_base_url.rstrip("/") + OUTBOUND_CALL_PATH
     headers = {"xi-api-key": settings.eleven_api_key or "", "Accept": "application/json"}
     timeout = httpx.Timeout(OUTBOUND_CALL_TIMEOUT_S, connect=10.0)

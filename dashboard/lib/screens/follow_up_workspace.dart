@@ -1,3 +1,6 @@
+import 'dart:math';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:forui/forui.dart';
 import '../models/follow_up_plan.dart';
@@ -31,14 +34,23 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
   final _masterScroll = ScrollController();
   final _detailScroll = ScrollController();
   final _mobileScroll = ScrollController();
+  Timer? _refreshTimer;
+  bool _polling = false;
   @override
   void initState() {
     super.initState();
     _load();
+    if (!widget.sample) {
+      _refreshTimer = Timer.periodic(
+        const Duration(seconds: 8),
+        (_) => _pollSelected(),
+      );
+    }
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _masterScroll.dispose();
     _detailScroll.dispose();
     _mobileScroll.dispose();
@@ -60,6 +72,22 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
       )
       .toList();
   bool get _locked => _loading || _busy;
+
+  Future<void> _pollSelected() async {
+    if (_locked || _polling || _selected == null) return;
+    final id = _selected!.id;
+    _polling = true;
+    try {
+      final plan = await widget.api.plan(id);
+      if (mounted && !_locked && _selected?.id == id) {
+        setState(() => _selected = plan);
+      }
+    } catch (_) {
+      // Keep existing results; the explicit Refresh action reports connection errors.
+    } finally {
+      _polling = false;
+    }
+  }
 
   Future<void> _load() async {
     setState(() {
@@ -119,12 +147,31 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
 
   Future<void> _action(String action) async {
     if (_locked || _selected == null) return;
+    String? destination;
     if (['call', 'activate', 'finish'].contains(action)) {
       setState(() {
         _busy = true;
         _confirming = true;
       });
       final p = _selected!;
+      if (action == 'call') {
+        try {
+          final patients = await widget.api.patients();
+          destination = patients
+              .firstWhere((patient) => patient.id == p.patientId)
+              .phone;
+        } catch (e) {
+          if (mounted) {
+            setState(() {
+              _busy = false;
+              _confirming = false;
+              _error = 'Cannot confirm the destination number. $e';
+            });
+          }
+          return;
+        }
+        if (!mounted) return;
+      }
       final confirmed = await confirmPlanAction(
         context,
         title: action == 'activate'
@@ -136,12 +183,12 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
             ? '${p.name}\n${p.instructions}\n\n${p.schedule['frequency']} at ${p.schedule['local_time']} · ${p.schedule['timezone']}\n${p.schedule['start_date']} → ${p.schedule['end_date']}\n\nConfirm you have reviewed the instructions, tracking and schedule.'
             : action == 'finish'
             ? 'Finish future follow-up for ${p.name}? A call already in progress is not ended.'
-            : 'Request an additional call to ${p.name}? Confirm the patient and displayed phone number before continuing.',
+            : '${p.name}\n$destination\n\n${p.instructions}\n\nQuestions:\n${(p.data['questions'] as List? ?? []).join('\n')}\n\nPhotos: ${p.data['photo_policy']}\nUses the agent’s configured duration limit. One attempt only; no automatic callback.\n\nApprove this plan for this call only. The existing schedule and paused/active state will not change.',
         confirmLabel: action == 'activate'
             ? 'Confirm activation'
             : action == 'finish'
             ? 'Finish plan'
-            : 'Confirm call',
+            : 'Approve and call once',
       );
       if (!mounted) return;
       setState(() {
@@ -157,7 +204,22 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
     });
     try {
       final id = _selected!.id;
-      await widget.api.action(id, action);
+      final random = Random.secure();
+      final dispatch = await widget.api.action(
+        id,
+        action,
+        body: action == 'call'
+            ? {
+                'approved': true,
+                'revision': _selected!.data['revision'],
+                'expected_phone': destination,
+                'request_key': List.generate(
+                  24,
+                  (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+                ).join(),
+              }
+            : null,
+      );
       final plan = await widget.api.plan(id);
       if (!mounted) return;
       setState(() {
@@ -168,9 +230,18 @@ class _FollowUpWorkspaceState extends State<FollowUpWorkspace> {
             ? 'Needs review'
             : 'Active';
         // Do not claim a call was dispatched when the offline implementation did nothing.
-        _notice = action == 'call'
-            ? (widget.sample ? null : 'Call requested. Refresh for results.')
-            : 'Plan updated.';
+        if (action != 'call') {
+          _notice = 'Plan updated.';
+        } else if (widget.sample) {
+          _notice = null;
+        } else if (dispatch?['mock'] == true) {
+          _notice = 'Simulated call only. No phone call was placed.';
+        } else if (dispatch?['status'] == 'in_progress') {
+          _notice = 'Call initiated. Refresh for results.';
+        } else {
+          _notice =
+              'Call status: ${dispatch?['status'] ?? 'unconfirmed'}. Refresh history before retrying.';
+        }
       });
       await _load();
     } catch (e) {

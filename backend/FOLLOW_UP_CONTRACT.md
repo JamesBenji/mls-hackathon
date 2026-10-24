@@ -1,5 +1,19 @@
 # Follow-up integration contract
 
+## Immediate one-off calls
+
+`POST /follow-up-plans/{id}/call` requires `{approved:true,revision:int,expected_phone:string,request_key:string}`. The request key must be a fresh random 16–128 character alphanumeric/underscore/hyphen value per explicit approval, reused for retries. A repeated key returns the original dispatch, never another call. The plan may be draft, active or paused, provided it has generated questions and instructions; explicit confirmation approves that revision for this call only. Finished plans are rejected. Approval is scoped to the displayed plan revision and destination number. The draft/paused/active state, recurrence and next scheduled slot are not changed. The call receives one attempt only: automatic retries, resumption and callbacks are disabled for that session.
+
+Real immediate calls require `ELEVEN_IMMEDIATE_CALL_BRANCH_ID` pointing to the reviewed photo-capable branch. Calls use that agent's configured duration, with no extra one-minute cap. An optional API `max_duration_seconds` override accepts 15–3600 seconds and requires provider override permission; it is not sent by the desktop. Photo tools continue to require the generated session credential and approved photo policy. Configure the branch in Coolify and redeploy; no agent provisioning runs automatically.
+
+The response remains the plan detail dictionary with an additional `call_dispatch` containing `call_session_id`, `status`, `mock`, `max_duration_seconds`, and `single_attempt`. A provider error is recorded as `dispatch_unknown` and blocks new calls for that patient until the provider result is reconciled; do not assume failure means no call occurred. An already pending/ongoing call blocks a second approval. History exposes `mock` separately from operational status. Shared service-key authentication remains unchanged and is not identity-bound doctor authorization.
+
+## Patient creation and photo review
+
+`POST /patients` accepts `{doctor_id,name,phone}` and creates a minimal patient for an existing doctor, normalizing the phone to E.164. The desktop exposes this inside New plan → New patient. `POST /patients/{id}/pairing-token` accepts `{doctor_id}` and issues a patient-scoped bearer credential with a no-store response. This route is a trusted service-key operator bootstrap with the same shared-key limitations as other dashboard operations, not doctor login. Transfer the credential privately to the phone app before attempting push/photo collection.
+
+Plan details include `photo_requests` associated through the call session and each call's latest `transcript`. The dashboard fetches image bytes using service authentication at `GET /follow-up-plans/{id}/photos/{photo_id}/content`; this route verifies the photo belongs to a call in that plan and returns private/no-store content. Technical quality feedback is advisory, separate from diagnosis and clinical approval. The desktop refreshes selected results every eight seconds while connected and idle.
+
 Backend reconciliation supersedes `feat/medgemma-elevenlabs` while retaining its Gemma 4 cloud gateway and existing patient/clinical schema. No ElevenLabs configuration is provisioned or changed. The old provisioning entrypoint now refuses to run.
 
 ## Dashboard

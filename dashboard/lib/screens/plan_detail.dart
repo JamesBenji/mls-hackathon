@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:forui/forui.dart';
+import '../widgets/plan_photos.dart';
 import '../models/follow_up_plan.dart';
 import '../services/plan_api.dart';
 import '../widgets/workspace_widgets.dart';
@@ -124,17 +125,20 @@ class _PlanDetailState extends State<PlanDetail> {
                               prefix: const Icon(FLucideIcons.pause, size: 14),
                               child: const Text('Pause'),
                             ),
+                          ],
+                          if (p.status != 'finished')
                             WorkspaceButton(
                               onPress:
                                   widget.busy ||
                                       patient == null ||
-                                      patient.phone.isEmpty
+                                      !RegExp(r'^\+[1-9][0-9]{6,14}$').hasMatch(
+                                        patient.phone.replaceAll(' ', ''),
+                                      )
                                   ? null
                                   : () => widget.onAction('call'),
                               prefix: const Icon(FLucideIcons.phone, size: 14),
                               child: const Text('Call now'),
                             ),
-                          ],
                           if (p.status != 'finished')
                             WorkspaceButton(
                               onPress: widget.busy
@@ -224,7 +228,7 @@ class _PlanDetailState extends State<PlanDetail> {
                       Text('• $question'),
                     const SizedBox(height: 10),
                     const Text(
-                      'Correct the instructions to regenerate this interpretation. Activation requires your review.',
+                      'Review this interpretation before approving a call. Edit the instructions to correct it.',
                     ),
                   ],
                 ),
@@ -236,6 +240,7 @@ class _PlanDetailState extends State<PlanDetail> {
           padding: const EdgeInsets.only(bottom: 12),
           child: PlanResults(plan: p),
         ),
+        _section('Photos & quality', PlanPhotos(plan: p, api: widget.api)),
         _section(
           'Call history',
           Column(
@@ -250,12 +255,17 @@ class _PlanDetailState extends State<PlanDetail> {
               for (final call in p.calls)
                 Disclosure(
                   title: Text(
-                    '${utcTimestamp(call['started_at'] ?? call['created_at'])} · ${call['status'] ?? 'Status not provided'}',
+                    '${utcTimestamp(call['started_at'] ?? call['created_at'])} · ${call['mock'] == true ? 'Simulated' : call['status'] ?? 'Status not provided'}',
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       SelectableText('AI summary: ${_value(call['summary'])}'),
+                      if (call['transcript'] != null)
+                        Disclosure(
+                          title: const Text('Transcript'),
+                          child: SelectableText('${call['transcript']}'),
+                        ),
                       if (call['results'] != null)
                         SelectableText(
                           'AI interpretation: ${_value(call['results'])}',

@@ -16,6 +16,8 @@ def _env(*names: str) -> AliasChoices:
 
 
 class Settings(BaseSettings):
+    # A branch with duration overrides enabled; never change the live agent here.
+    eleven_immediate_call_branch_id: str = ""
     model_config = SettingsConfigDict(
         env_file=".env", extra="ignore", populate_by_name=True
     )

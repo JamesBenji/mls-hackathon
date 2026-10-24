@@ -3,6 +3,7 @@ import 'package:forui/forui.dart';
 import '../models/follow_up_plan.dart';
 import '../services/plan_api.dart';
 import '../widgets/workspace_widgets.dart';
+import 'patient_editor.dart';
 
 class PlanEditor extends StatefulWidget {
   final PlanApi api;
@@ -28,11 +29,13 @@ class _PlanEditorState extends State<PlanEditor> {
   bool _loading = false, _busy = false;
   String? _error;
   String _frequency = 'once';
+  bool _scheduling = false;
   bool get _creating => widget.plan == null;
   @override
   void initState() {
     super.initState();
     final p = widget.plan;
+    _scheduling = p?.schedule.isNotEmpty ?? false;
     final initial = <String, String>{
       'instructions': p?.instructions ?? '',
       for (final key in ['timezone', 'local_time', 'start_date', 'end_date'])
@@ -68,6 +71,20 @@ class _PlanEditorState extends State<PlanEditor> {
     }
   }
 
+  Future<void> _newPatient() async {
+    final patient = await Navigator.of(context).push<PlanPatient>(
+      MaterialPageRoute(
+        builder: (_) =>
+            PatientEditor(api: widget.api, doctorId: widget.doctorId),
+      ),
+    );
+    if (!mounted || patient == null) return;
+    setState(() {
+      _patients = [..._patients.where((p) => p.id != patient.id), patient];
+      _patientId = patient.id;
+    });
+  }
+
   @override
   void dispose() {
     for (final c in _fields.values) {
@@ -86,6 +103,7 @@ class _PlanEditorState extends State<PlanEditor> {
       label: Text(label),
       validator: (v) {
         final value = (v ?? '').trim();
+        if (key != 'instructions' && !_scheduling) return null;
         if (value.isEmpty) return 'Required';
         if (key == 'local_time' &&
             !RegExp(r'^([01]\d|2[0-3]):[0-5]\d$').hasMatch(value)) {
@@ -122,22 +140,26 @@ class _PlanEditorState extends State<PlanEditor> {
           _fields['instructions']!.text.trim(),
         );
       } else {
-        final schedule = {
-          for (final key in [
-            'timezone',
-            'local_time',
-            'start_date',
-            'end_date',
-          ])
-            key: _fields[key]!.text.trim(),
-          'frequency': _frequency,
-        };
+        final schedule = _scheduling
+            ? {
+                for (final key in [
+                  'timezone',
+                  'local_time',
+                  'start_date',
+                  'end_date',
+                ])
+                  key: _fields[key]!.text.trim(),
+                'frequency': _frequency,
+              }
+            : null;
         final changes = <String, dynamic>{
           if (_fields['instructions']!.text.trim() != widget.plan!.instructions)
             'instructions': _fields['instructions']!.text.trim(),
-          if (schedule.entries.any(
-            (e) => widget.plan!.schedule[e.key] != e.value,
-          ))
+          if (schedule == null
+              ? widget.plan!.schedule.isNotEmpty
+              : schedule.entries.any(
+                  (e) => widget.plan!.schedule[e.key] != e.value,
+                ))
             'schedule': schedule,
         };
         if (changes.isNotEmpty) await widget.api.edit(widget.plan!.id, changes);
@@ -154,8 +176,8 @@ class _PlanEditorState extends State<PlanEditor> {
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !_busy,
-    child: Scaffold(
-      body: Center(
+    child: FScaffold(
+      child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 780),
           child: SingleChildScrollView(
@@ -189,10 +211,20 @@ class _PlanEditorState extends State<PlanEditor> {
                   ),
                   const SizedBox(height: 20),
                   const Text(
-                    'Describe the follow-up in your own words. Review the derived tracking items and questions before activating.',
+                    'Describe what to track in your own words. Review the interpretation, then call immediately or add a schedule.',
                   ),
                   const SizedBox(height: 24),
                   if (_creating) ...[
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: WorkspaceButton(
+                        onPress: _busy ? null : _newPatient,
+                        variant: FButtonVariant.outline,
+                        prefix: const Icon(FLucideIcons.plus, size: 14),
+                        child: const Text('New patient'),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
                     if (_loading)
                       const FProgress()
                     else
@@ -222,25 +254,42 @@ class _PlanEditorState extends State<PlanEditor> {
                   _field('instructions', 'Doctor instructions', lines: 5),
                   if (!_creating) ...[
                     const Text(
-                      'Saving updated instructions regenerates the interpretation. Review it again before activating.',
+                      'Saving updated instructions regenerates the interpretation. Review it again before calling.',
                     ),
                     const SizedBox(height: 24),
-                    _field('timezone', 'Timezone · e.g. America/New_York'),
-                    _field('local_time', 'Call time · HH:mm'),
-                    FSelect<String>(
-                      label: const Text('Frequency'),
-                      enabled: !_busy,
-                      items: const {'Once': 'once', 'Daily': 'daily'},
-                      control: FSelectControl.lifted(
-                        value: _frequency,
-                        onChange: (v) {
-                          if (v != null) setState(() => _frequency = v);
-                        },
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: WorkspaceButton(
+                        variant: FButtonVariant.outline,
+                        onPress: _busy
+                            ? null
+                            : () => setState(() => _scheduling = !_scheduling),
+                        child: Text(
+                          _scheduling
+                              ? 'Remove optional schedule'
+                              : 'Add optional schedule',
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 24),
-                    _field('start_date', 'Start date · YYYY-MM-DD'),
-                    _field('end_date', 'End date · YYYY-MM-DD'),
+                    if (_scheduling) ...[
+                      const SizedBox(height: 18),
+                      _field('timezone', 'Timezone · e.g. America/New_York'),
+                      _field('local_time', 'Call time · HH:mm'),
+                      FSelect<String>(
+                        label: const Text('Frequency'),
+                        enabled: !_busy,
+                        items: const {'Once': 'once', 'Daily': 'daily'},
+                        control: FSelectControl.lifted(
+                          value: _frequency,
+                          onChange: (v) {
+                            if (v != null) setState(() => _frequency = v);
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      _field('start_date', 'Start date · YYYY-MM-DD'),
+                      _field('end_date', 'End date · YYYY-MM-DD'),
+                    ],
                   ],
                   if (_error != null)
                     Padding(

@@ -74,6 +74,7 @@ def photo_out(photo: PhotoAsset) -> dict:
         "mime_type": photo.mime_type,
         "size_bytes": photo.size_bytes,
         "created_at": photo.created_at,
+        "version": photo.content_hash,
         "content_url": f"/photos/{photo.id}/content",
     }
 

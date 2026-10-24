@@ -1,15 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import '../models/follow_up_plan.dart';
 
 abstract interface class PlanApi {
   Future<List<FollowUpPlan>> plans();
   Future<List<PlanPatient>> patients();
+  Future<PlanPatient> createPatient(int doctorId, String name, String phone);
+  Future<PlanJson> pairPatient(int doctorId, int patientId);
+  Future<Uint8List> photoBytes(int planId, String photoId);
   Future<FollowUpPlan> plan(int id);
   Future<FollowUpPlan> draft(int doctorId, int patientId, String instructions);
   Future<void> edit(int id, PlanJson changes);
-  Future<void> action(int id, String action);
+  Future<PlanJson?> action(int id, String action, {PlanJson? body});
 }
 
 class PlanApiException implements Exception {
@@ -76,6 +80,46 @@ class HttpPlanApi implements PlanApi {
           .map((e) => PlanPatient.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
   @override
+  Future<PlanPatient> createPatient(
+    int doctorId,
+    String name,
+    String phone,
+  ) async {
+    final response = await request('POST', 'patients', {
+      'doctor_id': doctorId,
+      'name': name,
+      'phone': phone,
+    });
+    return PlanPatient.fromJson(Map<String, dynamic>.from(response as Map));
+  }
+
+  @override
+  Future<PlanJson> pairPatient(int doctorId, int patientId) async {
+    final response = await request(
+      'POST',
+      'patients/$patientId/pairing-token',
+      {'doctor_id': doctorId},
+    );
+    return Map<String, dynamic>.from(response as Map);
+  }
+
+  @override
+  Future<Uint8List> photoBytes(int planId, String photoId) async {
+    final response = await client
+        .get(
+          base.resolve(
+            'follow-up-plans/$planId/photos/${Uri.encodeComponent(photoId)}/content',
+          ),
+          headers: {'X-API-Key': apiKey},
+        )
+        .timeout(const Duration(seconds: 30));
+    if (response.statusCode != 200) {
+      throw const PlanApiException('Photo unavailable. Refresh and retry.');
+    }
+    return response.bodyBytes;
+  }
+
+  @override
   Future<FollowUpPlan> plan(int id) async => FollowUpPlan(
     Map<String, dynamic>.from(
       await request('GET', 'follow-up-plans/$id') as Map,
@@ -102,7 +146,9 @@ class HttpPlanApi implements PlanApi {
   }
 
   @override
-  Future<void> action(int id, String action) async {
-    await request('POST', 'follow-up-plans/$id/$action');
+  Future<PlanJson?> action(int id, String action, {PlanJson? body}) async {
+    final response = await request('POST', 'follow-up-plans/$id/$action', body);
+    final dispatch = (response as Map?)?['call_dispatch'];
+    return dispatch == null ? null : Map<String, dynamic>.from(dispatch as Map);
   }
 }

@@ -38,14 +38,14 @@ def test_review_required_and_pause_cancels(client, db, seeded, monkeypatch):
     assert plan["status"] == "draft" and plan["next_call_at"] is None
     assert scheduler.get_job(f"plan:{pid}") is None
     assert not db.scalars(select(PlanCall)).all()
-    assert client.post(f"/follow-up-plans/{pid}/call").status_code == 409
+    assert client.post(f"/follow-up-plans/{pid}/call").status_code == 422
     assert client.post(f"/follow-up-plans/{pid}/activate").status_code == 422
     assert client.patch(f"/follow-up-plans/{pid}", json={"schedule": schedule()}).status_code == 200
     assert client.post(f"/follow-up-plans/{pid}/activate").json()["status"] == "active"
     assert scheduler.get_job(f"plan:{pid}") is not None
     assert client.post(f"/follow-up-plans/{pid}/pause").json()["next_call_at"] is None
     assert scheduler.get_job(f"plan:{pid}") is None
-    assert client.post(f"/follow-up-plans/{pid}/call").status_code == 409
+    assert client.post(f"/follow-up-plans/{pid}/call").status_code == 422
     assert client.post(f"/follow-up-plans/{pid}/finish").json()["status"] == "finished"
     assert client.post(f"/follow-up-plans/{pid}/activate").status_code == 409
 
@@ -71,11 +71,17 @@ def test_plan_context_and_photo_authorization(client, db, seeded, monkeypatch):
     client.patch(f"/follow-up-plans/{pid}", json={"schedule": schedule()})
     client.post(f"/follow-up-plans/{pid}/activate")
     captured = []
-    async def place(_number, variables):
+    async def place(_number, variables, **kwargs):
         captured.append(variables)
         return {"conversation_id": f"offline-conv-{len(captured)}", "call_sid": "offline", "mock": True}
     monkeypatch.setattr(elevenlabs, "place_outbound_call", place)
-    result = client.post(f"/follow-up-plans/{pid}/call")
+    reviewed = client.get(f"/follow-up-plans/{pid}").json()
+    from app.models import Patient
+    result = client.post(f"/follow-up-plans/{pid}/call", json={
+        "approved": True, "revision": reviewed["revision"],
+        "expected_phone": db.get(Patient, seeded["maria_id"]).phone,
+        "request_key": "offline-approval-0001", "max_duration_seconds": 60,
+    })
     assert result.status_code == 200, result.text
     variables = captured[0]
     assert "existing dressing instructions" in variables["question_plan"]
@@ -100,6 +106,49 @@ def test_plan_context_and_photo_authorization(client, db, seeded, monkeypatch):
     assert client.post("/tools/check_photo_status", json=status_body, headers=headers).status_code == 200
     client.post(f"/follow-up-plans/{pid}/pause")
     assert client.post("/tools/request_photo", json=body, headers=headers).status_code == 401
+
+
+def test_paused_one_off_is_idempotent_and_never_schedules(client, db, seeded, monkeypatch):
+    from app.models import Patient
+
+    plan = draft(client, seeded, monkeypatch)
+    pid = plan["id"]
+    client.post(f"/follow-up-plans/{pid}/pause")
+    calls = []
+
+    async def place(number, variables, **options):
+        calls.append((variables, options))
+        return {"conversation_id": "one-off-conversation", "call_sid": "offline", "mock": True}
+
+    monkeypatch.setattr(elevenlabs, "place_outbound_call", place)
+    approval = {
+        "approved": True, "revision": plan["revision"],
+        "expected_phone": db.get(Patient, seeded["maria_id"]).phone,
+        "request_key": "one-off-approval-0001", "max_duration_seconds": 60,
+    }
+    url = f"/follow-up-plans/{pid}/call"
+    assert client.post(url, json={**approval, "revision": 999}).status_code == 409
+    assert client.post(url, json={**approval, "max_duration_seconds": 3601}).status_code == 422
+    response = client.post(url, json=approval)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["status"] == "paused" and result["next_call_at"] is None
+    assert result["call_dispatch"]["mock"] is True
+    assert calls[0][1]["max_duration_seconds"] == 60
+    assert client.post(url, json=approval).status_code == 200
+    assert len(calls) == 1
+    assert scheduler.get_job(f"plan:{pid}") is None
+    assert client.post(url, json={**approval, "request_key": "another-approval-0002"}).status_code == 409
+
+    variables = calls[0][0]
+    response = client.post("/tools/request_photo", json={
+        "session_id": variables["session_id"], "conversation_id": "one-off-conversation",
+        "instructions": "Show the dressing in good light",
+    }, headers={
+        "Authorization": variables["secret__photo_tool_authorization"],
+        "Idempotency-Key": variables["photo_request_key"],
+    })
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.asyncio
