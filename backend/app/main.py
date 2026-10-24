@@ -19,9 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models  # noqa: F401  (registers tables on Base.metadata)
 from app.config import settings
-from app.database import get_db
+from app.database import Base, engine, get_db
 from app.photos.routes import router as photo_router
 from app.routers import (
     agent_jobs,
@@ -43,6 +43,9 @@ log = logging.getLogger("guardian")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # No migrations in the hackathon: create missing tables (never drops).
+    # `python -m app.seed` resets the schema and loads demo data.
+    Base.metadata.create_all(bind=engine)
     if not settings.guardian_api_key:
         log.warning("GUARDIAN_API_KEY is empty: API-key auth is DISABLED (dev only)")
     if settings.mock_telephony or not settings.eleven_configured:

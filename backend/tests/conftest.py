@@ -20,7 +20,20 @@ os.environ.update({
     "GEMMA4_MODEL": "gemma4:12b",
     "CLINICAL_PIPELINE": "two_stage",
     "PLAN_TIMEOUT_S": "8",
+    "MODEL_TIMEOUT_S": "120",
+    "OLLAMA_NUM_CTX": "16384",
+    "OLLAMA_NUM_PARALLEL": "2",
     "TIMEZONE": "Europe/Berlin",
+    # Blank every real credential so a developer's backend/.env can never
+    # leak into tests (env vars take precedence over the .env file).
+    "ELEVEN_API_KEY": "",
+    "ELEVEN_AGENT_ID": "",
+    "ELEVEN_AGENT_PHONE_NUMBER_ID": "",
+    "TWILIO_ACCOUNT_SID": "",
+    "TWILIO_API_KEY_SID": "",
+    "TWILIO_API_KEY_SECRET": "",
+    "TWILIO_NUMBER": "",
+    "EMAIL_API_KEY": "",
 })
 
 from datetime import date, timedelta  # noqa: E402
@@ -48,9 +61,11 @@ def _schema():
 @pytest.fixture(autouse=True)
 def _reset_singletons():
     yield
-    from app.adapters import ollama_client
+    from app.adapters import elevenlabs, ollama_client
     from app.services import scheduler
-    for fn in (lambda: ollama_client.set_transport(None), scheduler.reset_scheduler):
+    for fn in (lambda: ollama_client.set_transport(None),
+               lambda: elevenlabs.set_transport(None),
+               scheduler.reset_scheduler):
         try:
             fn()
         except NotImplementedError:  # module not implemented yet
