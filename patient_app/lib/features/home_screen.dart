@@ -42,15 +42,6 @@ class _HomeScreenState extends State<HomeScreen> {
             _notificationVisible = true;
             _tab = 0;
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('New photo request'),
-              action: SnackBarAction(
-                label: 'Open',
-                onPressed: () => _openPushRequest(id),
-              ),
-            ),
-          );
         }),
       );
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -66,9 +57,14 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (id != demoPhotoRequest.id) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Request unavailable.')));
+      showFToast(
+        context: context,
+        variant: FToastVariant.destructive,
+        title: Semantics(
+          liveRegion: true,
+          child: const Text('Request unavailable.'),
+        ),
+      );
       return;
     }
     _openRequest();
@@ -184,8 +180,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (!context.mounted) {
                     return;
                   }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Token copied.')),
+                  showFToast(
+                    context: context,
+                    title: Semantics(
+                      liveRegion: true,
+                      child: const Text('Token copied.'),
+                    ),
                   );
                 },
                 prefix: const Icon(Icons.copy_outlined),
@@ -194,7 +194,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              SelectableText(
+              Text(
                 push.token!,
                 style: const TextStyle(fontSize: 10, color: CareColors.muted),
               ),
@@ -563,50 +563,53 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _notification() {
-    return CarePanel(
-      color: const Color(0xFFEDF5F2),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.notifications_active_outlined,
-                size: 16,
-                color: CareColors.teal,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'MEDICALL',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.6,
+    return Semantics(
+      liveRegion: true,
+      child: CarePanel(
+        color: const Color(0xFFEDF5F2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.notifications_active_outlined,
+                  size: 16,
+                  color: CareColors.teal,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'MEDICALL',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.6,
+                    ),
                   ),
                 ),
-              ),
-              FButton.icon(
-                variant: FButtonVariant.ghost,
-                semanticsLabel: 'Dismiss notification',
-                onPress: () => setState(() => _notificationVisible = false),
-                child: const Icon(Icons.close, size: 16),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'New photo request',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          const Text('Your doctor requested a photo.', style: bodyStyle),
-          const SizedBox(height: 14),
-          FButton(
-            onPress: () => _openPushRequest(_notificationRequestId),
-            child: const Text('Open request'),
-          ),
-        ],
+                FButton.icon(
+                  variant: FButtonVariant.ghost,
+                  semanticsLabel: 'Dismiss notification',
+                  onPress: () => setState(() => _notificationVisible = false),
+                  child: const Icon(Icons.close, size: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'New photo request',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            const Text('Your doctor requested a photo.', style: bodyStyle),
+            const SizedBox(height: 14),
+            FButton(
+              onPress: () => _openPushRequest(_notificationRequestId),
+              child: const Text('Open request'),
+            ),
+          ],
+        ),
       ),
     );
   }

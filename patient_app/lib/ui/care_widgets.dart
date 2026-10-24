@@ -19,9 +19,9 @@ class CarePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: CareColors.background,
-      body: SafeArea(
+    return FScaffold(
+      childPad: false,
+      child: SafeArea(
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 600),
@@ -151,8 +151,6 @@ class PageBackHeader extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-        const Spacer(),
-        const StatusPill(label: 'DEMO'),
       ],
     );
   }

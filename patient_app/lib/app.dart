@@ -29,7 +29,10 @@ class MedicallApp extends StatelessWidget {
       theme: theme.toApproximateMaterialTheme(),
       localizationsDelegates: FLocalizations.localizationsDelegates,
       supportedLocales: FLocalizations.supportedLocales,
-      builder: (context, child) => FTheme(data: theme, child: child!),
+      builder: (context, child) => FTheme(
+        data: theme,
+        child: FToaster(child: child!),
+      ),
       home: HomeScreen(pushNotifications: pushNotifications),
     );
   }
