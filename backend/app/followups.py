@@ -342,8 +342,6 @@ async def call_now(plan_id: int, body: "ImmediateCallIn", db: Db):
     if patient is None or patient.doctor_id != plan.doctor_id:
         raise HTTPException(409, "Patient association is not valid")
     from app import phone
-    from app.adapters import elevenlabs
-    from app.config import settings
     destination = phone.normalize_e164(patient.phone)
     if not destination:
         raise HTTPException(422, "Set a valid patient phone number including country code")
@@ -351,8 +349,6 @@ async def call_now(plan_id: int, body: "ImmediateCallIn", db: Db):
         raise HTTPException(409, "Patient phone number changed; confirm the destination again")
     if not plan.instructions.strip() or not plan.questions:
         raise HTTPException(422, "Review the plan instructions and questions first")
-    if not elevenlabs.is_mock() and not settings.eleven_immediate_call_branch_id:
-        raise HTTPException(503, "Configure the immediate-call agent branch before dispatching")
     previous = db.scalars(select(PlanCall).where(PlanCall.plan_id == plan.id)).all()
     for linked in previous:
         approval = linked.approved_context.get("one_off_approval", {})

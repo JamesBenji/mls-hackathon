@@ -11,7 +11,7 @@ def main() -> int:
     parser.add_argument('--plan-id', type=int, required=True)
     parser.add_argument('--phone', required=True)
     parser.add_argument('--approve-real-call', action='store_true', required=True)
-    parser.add_argument('--branch-id', default='agtbrch_7701m5q3y1cwf8bt2qbeeg78tf6t')
+    parser.add_argument('--branch-id')
     args = parser.parse_args()
 
     from fastapi import HTTPException
@@ -23,11 +23,10 @@ def main() -> int:
     # This process alone opts into real telephony. Recurring scheduler configuration
     # and the running API's mock setting are not changed.
     settings.mock_telephony = False
-    settings.eleven_immediate_call_branch_id = args.branch_id
+    if args.branch_id:
+        settings.eleven_immediate_call_branch_id = args.branch_id
     if not settings.eleven_configured:
         parser.error('ElevenLabs credentials are missing; no call was placed')
-    if not settings.eleven_immediate_call_branch_id:
-        parser.error('Set ELEVEN_IMMEDIATE_CALL_BRANCH_ID before calling')
 
     with SessionLocal() as db:
         plan = db.get(FollowUpPlan, args.plan_id)
