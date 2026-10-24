@@ -99,8 +99,8 @@ class CallStartError(Exception):
 # --- small helpers -----------------------------------------------------------
 
 def _err(exc: BaseException) -> str:
-    text = str(exc).strip() or type(exc).__name__
-    return text[:_MAX_ERROR_CHARS]
+    # Provider exception bodies can echo prompts, transcripts and runtime credentials.
+    return type(exc).__name__
 
 
 def _patient(db: Session, session: models.CallSession) -> models.Patient | None:
@@ -135,7 +135,7 @@ async def _notify(*, patient_id: int | None, subject: str, body: str, urgent: bo
         await notifications.notify_doctor(patient_id=patient_id, subject=subject, body=body,
                                           urgent=urgent)
     except Exception:
-        log.exception("notify_doctor failed (patient %s, subject %r)", patient_id, subject)
+        log.warning("notify_doctor failed (patient_id=%s)", patient_id)
 
 
 def _fallback_plan(questions: list[str]) -> QuestionPlan:
@@ -177,22 +177,44 @@ async def question_plan_for(db: Session, patient_id: int) -> QuestionPlan:
 
 # --- outbound calls ------------------------------------------------------------
 
-async def start_call(db: Session, patient_id: int, *, call_job_id: int | None = None) -> dict:
+async def start_call(db: Session, patient_id: int, *, call_job_id: int | None = None,
+                     follow_up_plan_id: int | None = None) -> dict:
     patient = db.get(models.Patient, patient_id)
     if patient is None:
         raise LookupError(f"patient {patient_id} not found")
+    if call_job_id is not None:
+        job = db.get(models.CallJob, call_job_id)
+        if job is None or job.patient_id != patient_id or job.doctor_id != patient.doctor_id:
+            raise LookupError("Call job not found for this patient/doctor")
 
     session = models.CallSession(patient_id=patient.id, direction="outbound", channel="voice",
                                  status="scheduled", call_job_id=call_job_id, attempt=0)
     db.add(session)
     db.flush()
+    if follow_up_plan_id is not None:
+        from app.followups import FollowUpPlan, PlanCall
+        import secrets
+        approved = db.scalar(select(FollowUpPlan).where(FollowUpPlan.id == follow_up_plan_id)
+                             .execution_options(populate_existing=True).with_for_update())
+        if (approved is None or approved.status != "active" or approved.patient_id != patient_id
+                or approved.doctor_id != patient.doctor_id):
+            db.rollback()
+            raise CallStartError("Plan is not active for this patient")
+        prior = db.scalar(select(PlanCall.session_id).where(PlanCall.plan_id == approved.id))
+        db.add(PlanCall(session_id=session.id, plan_id=approved.id,
+                       photo_request_key=secrets.token_hex(24),
+                       photo_allowed=approved.photo_policy == "every_call" or (
+                           approved.photo_policy == "first_call" and prior is None),
+                       approved_context={key: getattr(approved, key) for key in (
+                           "instructions", "context", "questions", "tracked_items", "photo_policy", "revision")}))
+        db.flush()
     try:
         variables, plan = await context_builder.build_dynamic_variables(
             db, session, resume_from="start")
         result = await elevenlabs.place_outbound_call(patient.phone, variables)
     except Exception as exc:
         session.status = "failed"
-        session.last_error = _err(exc)
+        session.last_error = type(exc).__name__
         db.commit()
         log.error("call start failed for patient %s (session %s): %s",
                   patient.id, session.id, session.last_error)
@@ -232,6 +254,12 @@ async def resume_call(db: Session, session_id: int) -> dict | None:
         return None
     if session.status not in ("callback_pending", "missed"):
         log.info("resume_call: session %s is %s; nothing to resume", session_id, session.status)
+        return None
+    from app.followups import FollowUpPlan, PlanCall
+    linked = db.get(PlanCall, session.id)
+    if linked and db.get(FollowUpPlan, linked.plan_id).status != "active":
+        session.status, session.callback_at = "cancelled", None
+        db.commit()
         return None
     if session.attempt >= settings.max_call_attempts:
         await give_up(db, session)
@@ -312,6 +340,10 @@ async def schedule_callback(db: Session, session: models.CallSession, *,
                             checkpoint: str | None = None) -> datetime:
     if session.patient_id is None:
         raise ValueError("cannot call back an unknown caller")
+    from app.followups import FollowUpPlan, PlanCall
+    linked = db.get(PlanCall, session.id)
+    if linked and db.get(FollowUpPlan, linked.plan_id).status != "active":
+        raise ValueError("Follow-up plan is not active")
     mins = _coerce_minutes(minutes)
     callback_at = timeutil.utcnow() + timedelta(minutes=mins)
     item = (missing_item or "").strip() or None
@@ -385,6 +417,13 @@ async def give_up(db: Session, session: models.CallSession, background: Any = No
 async def _handle_missed(db: Session, session: models.CallSession, reason: str,
                          background: Any = None) -> dict:
     """Missed call / voicemail: SMS + retry later, or give up at the cap."""
+    from app.followups import FollowUpPlan, PlanCall
+    linked = db.get(PlanCall, session.id)
+    if linked and db.get(FollowUpPlan, linked.plan_id).status != "active":
+        session.status, session.callback_at = "cancelled", None
+        _cancel_resume(session.id)
+        db.commit()
+        return {"cancelled": True}
     session.status = "missed"
     session.last_error = reason[:_MAX_ERROR_CHARS] if reason else None
     if session.attempt >= settings.max_call_attempts:
@@ -766,6 +805,14 @@ async def _post_call(db: Session, session_id: int, *, force: bool) -> None:
         log.info("session %s: no patient response (voicemail/silence) -> missed", session.id)
         await _handle_missed(db, session, "no patient response (voicemail or silence)")
         return
+
+    # Structured patient reports are independent of AI report prose/clinical interpretation.
+    from app.tracking import extract_observations
+    try:
+        await extract_observations(db, session.id, text)
+    except Exception:
+        db.rollback()
+        log.warning("Tracking extraction unavailable for session %s", session.id)
 
     if not force:
         done = db.scalars(select(models.CallReport.id)

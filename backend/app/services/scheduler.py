@@ -244,6 +244,8 @@ def reload_pending() -> int:
     db = None
     try:
         db = database.SessionLocal()
+        from app.followups import reload_plans
+        reload_plans(db)
         rows = db.execute(
             select(models.CallSession.id, models.CallSession.callback_at)
             .where(models.CallSession.status == "callback_pending",
@@ -292,6 +294,11 @@ async def run_start_call(patient_id: int, call_job_id: int | None = None) -> Non
         from app.services import call_orchestrator
 
         db = database.SessionLocal()
+        if call_job_id is not None:
+            # Old extracted jobs have no recorded explicit approval. Only the
+            # authorized legacy /start endpoint may execute them, never a queue.
+            log.warning("Skipped legacy queued call job %s; explicit review/start required", call_job_id)
+            return
         log.info("scheduled call for patient %s (call job %s)", patient_id, call_job_id)
         await call_orchestrator.start_call(db, patient_id, call_job_id=call_job_id)
         db.commit()

@@ -16,5 +16,4 @@ async def notify_doctor(
 ) -> None:
     # TODO(email): send via SendGrid/Resend with dashboard link + PDF.
     level = logging.WARNING if urgent else logging.INFO
-    log.log(level, "notify_doctor patient=%s urgent=%s subject=%r body=%r",
-            patient_id, urgent, subject, body)
+    log.log(level, "Doctor notification pending: patient_id=%s urgent=%s", patient_id, urgent)

@@ -53,7 +53,7 @@ def test_clarification(client, db, seeded, extract):
     assert call["now"].tzinfo is not None
 
 
-def test_created_and_scheduled(client, db, seeded, extract):
+def test_created_as_draft_without_scheduling(client, db, seeded, extract):
     at = (timeutil.utcnow() + timedelta(days=1)).replace(microsecond=0)
     extract["result"] = CallJobExtraction(draft=_draft(), patient_id=seeded["maria_id"],
                                           scheduled_at_utc=at.isoformat())
@@ -64,11 +64,11 @@ def test_created_and_scheduled(client, db, seeded, extract):
     assert body["status"] == "created"
     job = body["job"]
     assert (job["status"], job["patient_id"], job["source"]) == (
-        "scheduled", seeded["maria_id"], "voice")
+        "pending", seeded["maria_id"], "voice")
     assert job["scheduled_at"] == at.isoformat() and job["raw_text"] == TEXT
     assert job["questions"] == ["Any dizziness?"] and job["patient_name"] == "Maria Gomez"
-    assert scheduler.get_job(f"job:{job['id']}") is not None
-    assert scheduler.job_run_at_utc(f"job:{job['id']}") == at
+    assert scheduler.get_job(f"job:{job['id']}") is None
+    assert client.get(f"/follow-up-plans/{body['plan_id']}").json()["status"] == "draft"
 
 
 def test_created_without_time_is_pending(client, seeded, extract):
@@ -85,7 +85,7 @@ def test_local_draft_time_fallback(client, seeded, extract):
                                           patient_id=seeded["maria_id"])
     job = client.post("/agent/jobs", json={"doctor_id": seeded["doctor_id"],
                                            "text": TEXT}).json()["job"]
-    assert job["status"] == "scheduled"
+    assert job["status"] == "pending"
     assert job["scheduled_at"] == timeutil.to_utc_naive(local).isoformat()
 
 
@@ -129,8 +129,8 @@ def test_list_jobs_with_filters(client, seeded, extract):
 
     rows = client.get(f"/agent/jobs?doctor_id={seeded['doctor_id']}").json()
     assert [j["patient_name"] for j in rows] == ["John Carter", "Maria Gomez"]  # newest first
-    assert [j["status"] for j in client.get("/agent/jobs?status=scheduled").json()] == [
-        "scheduled"]
+    assert client.get("/agent/jobs?status=scheduled").json() == []
+    assert len(client.get("/agent/jobs?status=pending").json()) == 2
     assert client.get("/agent/jobs?doctor_id=9999").json() == []
     assert client.get("/agent/jobs?status=bogus").status_code == 422
     assert client.get(f"/agent/jobs/{rows[0]['id']}").json()["id"] == rows[0]["id"]

@@ -112,23 +112,22 @@ async def create_job(body: AgentJobIn, db: Session = Depends(get_db)) -> dict:
 
     draft = extraction.draft
     at = _parse_scheduled(extraction)
-    in_future = at is not None and at > timeutil.utcnow()
     job = models.CallJob(
         doctor_id=body.doctor_id, patient_id=extraction.patient_id, source=body.source,
         raw_text=body.text, situation=draft.situation, treatment=draft.treatment,
         questions=[q.strip() for q in draft.questions if q and q.strip()],
-        scheduled_at=at, status="scheduled" if in_future else "pending",
+        scheduled_at=at, status="pending",
     )
     db.add(job)
+    db.flush()
+    from app.followups import FollowUpPlan
+    plan = FollowUpPlan(doctor_id=job.doctor_id, patient_id=job.patient_id,
+                        legacy_job_id=job.id, instructions=body.text,
+                        context="\n".join(x for x in (job.situation, job.treatment) if x),
+                        questions=job.questions, status="draft", photo_policy="none")
+    db.add(plan)
     db.commit()
-    if in_future:
-        try:
-            scheduler.schedule_start_call(job.patient_id, at, call_job_id=job.id)
-        except Exception:
-            log.exception("could not schedule call job %s; left pending", job.id)
-            job.status = "pending"
-            db.commit()
-    return {"status": "created", "job": job_out(job, names[job.patient_id])}
+    return {"status": "created", "job": job_out(job, names[job.patient_id]), "plan_id": plan.id}
 
 
 @router.get("/agent/jobs")
@@ -161,8 +160,22 @@ def get_job(job_id: int, db: Session = Depends(get_db)) -> dict:
 @router.post("/agent/jobs/{job_id}/start")
 async def start_job(job_id: int, db: Session = Depends(get_db)) -> dict:
     job = _get_job(db, job_id)
+    from app.followups import FollowUpPlan, owned_patient
+    owned_patient(db, job.doctor_id, job.patient_id)
+    if job.status == "done":
+        raise HTTPException(409, "Job has already started")
+    plan = db.scalar(select(FollowUpPlan).where(FollowUpPlan.legacy_job_id == job.id))
+    if plan is not None:
+        if plan.status in ("paused", "finished") or not plan.questions:
+            raise HTTPException(409, "Review and activate the follow-up plan before calling")
+        # Legacy explicit start is approval for a single immediate call, never recurrence.
+        plan.status = "active"
+        db.commit()
     try:
-        result = await call_orchestrator.start_call(db, job.patient_id, call_job_id=job.id)
+        kwargs = {"call_job_id": job.id}
+        if plan is not None:
+            kwargs["follow_up_plan_id"] = plan.id
+        result = await call_orchestrator.start_call(db, job.patient_id, **kwargs)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc) or "patient not found") from exc
     except call_orchestrator.CallStartError as exc:

@@ -120,7 +120,7 @@ async def test_model_failure_gives_partial_report_and_keeps_transcript(db, seede
     report = db.scalars(select(models.CallReport)
                         .where(models.CallReport.call_session_id == sid)).one()
     assert report.status == "partial"
-    assert "report generation failed: ollama unreachable" in report.error
+    assert "report generation failed: RuntimeError" in report.error
     assert report.summary == "[report generation failed: ollama unreachable] Transcript saved."
     assert count(db, models.Transcription, models.Transcription.call_session_id == sid) == 1
     # Triage still runs on the transcript alone.

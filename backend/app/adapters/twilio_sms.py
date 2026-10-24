@@ -111,7 +111,7 @@ async def send_sms(db: Session, to: str, body: str, *, kind: str,
             log.warning("Twilio credentials incomplete (missing %s): SMS is MOCKED",
                         ", ".join(_missing_credentials()))
         row.status = "mock"
-        log.info("MOCK SMS (%s) to %s: %s", row.kind, _mask_phone(number), _preview(text))
+        log.info("MOCK SMS (%s) to %s", row.kind, _mask_phone(number))
     else:
         try:
             message = await asyncio.to_thread(

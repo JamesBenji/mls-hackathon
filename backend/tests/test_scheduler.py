@@ -288,9 +288,10 @@ async def test_run_start_call_calls_orchestrator(monkeypatch, spy_db):
     await scheduler.run_start_call(3, 9)
     await scheduler.run_start_call(4)
 
-    assert [(p, j) for _, p, j in calls] == [(3, 9), (4, None)]
-    assert [c[0] for c in calls] == spy_db
-    assert all(s.closed and s.committed for s in spy_db)
+    assert [(p, j) for _, p, j in calls] == [(4, None)]  # Extracted legacy queue jobs lack approval.
+    assert [c[0] for c in calls] == [spy_db[1]]
+    assert spy_db[0].closed and not spy_db[0].committed
+    assert spy_db[1].closed and spy_db[1].committed
 
 
 async def test_run_start_call_swallows_exceptions(monkeypatch, spy_db):

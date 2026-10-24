@@ -23,6 +23,8 @@ from app import models  # noqa: F401  (registers tables on Base.metadata)
 from app.config import settings
 from app.database import Base, engine, get_db
 from app.photos.routes import router as photo_router
+from app.followups import router as followup_router
+from app.photos.tools import router as photo_tools_router
 from app.routers import (
     agent_jobs,
     calls,
@@ -43,7 +45,7 @@ log = logging.getLogger("guardian")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # No migrations in the hackathon: create missing tables (never drops).
+    # Reconciliation uses additive tables, never alterations to existing columns.
     # `python -m app.seed` resets the schema and loads demo data.
     Base.metadata.create_all(bind=engine)
     if not settings.guardian_api_key:
@@ -67,7 +69,7 @@ app.add_middleware(
     allow_origins=settings.cors_origin_list,
     allow_origin_regex=settings.cors_origin_regex or None,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
+    allow_headers=["Content-Type", "X-API-Key", "Authorization", "Idempotency-Key"],
 )
 
 # Webhooks first (so e.g. POST /calls/webhook can never be shadowed by a
@@ -80,6 +82,7 @@ app.include_router(health.public_router)
 
 # Photo sync authenticates itself (per-device token), so no X-API-Key here.
 app.include_router(photo_router)
+app.include_router(photo_tools_router)
 
 # Protected by X-API-Key.
 _api_key = [Depends(require_api_key)]
@@ -88,6 +91,7 @@ app.include_router(calls.router, dependencies=_api_key)
 app.include_router(triage.router, dependencies=_api_key)
 app.include_router(clinical.router, dependencies=_api_key)
 app.include_router(agent_jobs.router, dependencies=_api_key)
+app.include_router(followup_router, dependencies=_api_key)
 app.include_router(sms.router, dependencies=_api_key)
 app.include_router(health.protected_router, dependencies=_api_key)
 

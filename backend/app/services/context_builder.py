@@ -304,6 +304,31 @@ async def build_dynamic_variables(db: Session, session: models.CallSession, *,
 
     patient = load_patient_context(db, session.patient_id)  # LookupError propagates
     reports = load_last_reports(db, session.patient_id)
+    from app.followups import PlanCall
+    linked = db.get(PlanCall, session.id)
+    if linked:
+        import hashlib
+        import secrets
+        import json
+        approved = linked.approved_context
+        plan = _static_plan(approved["questions"])
+        summary = db.scalar(select(models.CallReport.summary).join(
+            PlanCall, PlanCall.session_id == models.CallReport.call_session_id
+        ).where(PlanCall.plan_id == linked.plan_id).order_by(models.CallReport.id.desc()))
+        token = secrets.token_urlsafe(32)
+        linked.credential_hash = hashlib.sha256(token.encode()).hexdigest()
+        values = {
+            "patient_name": patient.name,
+            "question_plan": "Doctor-approved follow-up only. Do not invent thresholds or treatment.\n"
+                + json.dumps(approved, ensure_ascii=False)
+                + "\nPhoto request allowed this session: " + str(linked.photo_allowed),
+            "last_call_summary": (summary or "none")[:SUMMARY_MAX_CHARS],
+            "session_id": str(session.id), "resume_from": resume,
+            "secret__photo_tool_authorization": f"Bearer {token}",
+            "photo_request_key": linked.photo_request_key,
+        }
+        db.commit()  # Credential must be durable before the call can invoke a tool.
+        return values, plan
     questions = doctor_questions_for(db, session.patient_id, session.call_job_id)
     plan = await _question_plan(patient, reports, questions, session_id=session.id,
                                 budget_s=plan_timeout_s)
@@ -315,6 +340,13 @@ async def build_dynamic_variables(db: Session, session: models.CallSession, *,
         "session_id": str(session.id),
         "resume_from": resume,
     }
+    if session.call_job_id:
+        job = db.get(models.CallJob, session.call_job_id)
+        if job and job.patient_id == session.patient_id:
+            values["question_plan"] = (
+                f"Doctor-approved situation: {job.situation or ''}\n"
+                f"Doctor-approved treatment context (do not alter): {job.treatment or ''}\n"
+                + values["question_plan"])
     return {k: str(values[k]) for k in elevenlabs.REQUIRED_DYNAMIC_VARIABLES}, plan
 
 

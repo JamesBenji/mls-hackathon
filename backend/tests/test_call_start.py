@@ -64,7 +64,7 @@ def test_elevenlabs_error_is_502_and_session_failed(client, db, seeded, monkeypa
     db.expire_all()
     s = db.scalars(select(models.CallSession)
                    .where(models.CallSession.status == "failed")).one()
-    assert "number not verified" in s.last_error
+    assert s.last_error == "ElevenLabsError"  # Provider bodies may contain private call context.
     assert db.scalars(select(models.CallAttempt)
                       .where(models.CallAttempt.call_session_id == s.id)).first() is None
 
