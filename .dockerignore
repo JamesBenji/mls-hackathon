@@ -1,0 +1,22 @@
+# Allowlist: never send local .env files, service accounts or patient data to Docker.
+**
+!backend/
+!backend/Dockerfile
+!backend/requirements.txt
+!backend/app/
+!backend/app/**
+!backend/scripts/
+!backend/scripts/**
+!infra/
+!infra/coolify/
+!infra/coolify/api-entrypoint.py
+**/__pycache__
+**/*.pyc
+**/.env*
+**/*.json
+**/*.pem
+**/*.key
+**/*.db
+**/*.sqlite*
+**/private-photos
+**/reports_out

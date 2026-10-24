@@ -1,0 +1,7 @@
+Agent: Guten Tag, hier ist Guardian, ein KI-Assistent im Auftrag von Dr. Lee. Spreche ich mit Frau Gomez?
+Patient: Ja, am Apparat.
+Agent: Haben Sie heute Ihren Blutdruck gemessen? Was war der Wert?
+Patient: Ja, hundertfünfunddreißig zu fünfundachtzig.
+Agent: Haben Sie Schmerzen in der Brust, Atemnot oder starken Schwindel?
+Patient: Keine Brustschmerzen, aber ich kriege seit gestern Abend schlecht Luft.
+Agent: Danke, dass Sie mir das sagen. Ich informiere Dr. Lee sofort.

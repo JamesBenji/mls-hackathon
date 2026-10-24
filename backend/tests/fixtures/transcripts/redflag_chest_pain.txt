@@ -1,0 +1,9 @@
+Agent: Hello, this is Guardian, an AI assistant calling on behalf of Dr. Lee. Am I speaking with John Carter?
+Patient: Yes, that's me.
+Agent: Did you take your blood pressure today? What was the reading?
+Patient: Yes, it was 150 over 95.
+Agent: Did you take your medication today, and at what time?
+Patient: Yes, at 7.
+Agent: Are you having any chest pain, trouble breathing, or severe dizziness right now?
+Patient: Actually yes. I have had chest pain since this morning, and it gets worse when I walk.
+Agent: Thank you for telling me. I am alerting Dr. Lee right away so the doctor can call you back.

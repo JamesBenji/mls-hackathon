@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
@@ -13,6 +13,7 @@ from app.database import get_db
 from app.photos import push
 from app.photos.auth import current_credential, doctor_access, issue_credential, patient_access
 from app.photos.models import AccessCredential, PatientDevice, PhotoAsset, PhotoRequest, utcnow
+from app.photos.quality import PhotoQuality, check_quality, quality_out
 from app.photos.storage import decode_image, private_path
 
 
@@ -89,6 +90,7 @@ def request_out(db: Session, request: PhotoRequest) -> dict:
         "created_at": request.created_at,
         "completed_at": request.completed_at,
         "photo": photo_out(photo) if photo else None,
+        "quality": quality_out(db, request.id),
     }
 
 
@@ -236,17 +238,21 @@ def retry_push(patient_id: int, request_id: str, db: Db, credential: Doctor):
 
 @router.post("/me/photo-requests/{request_id}/photos", status_code=201)
 def upload_photo(
-    request_id: str, file: UploadFile, db: Db, credential: Patient, idempotency_key: IdempotencyKey
+    request_id: str, file: UploadFile, background: BackgroundTasks,
+    db: Db, credential: Patient, idempotency_key: IdempotencyKey
 ):
     request = owned_request(db, request_id, credential.patient_id)
     encoded, mime, digest = decode_image(file)
     existing = db.scalar(select(PhotoAsset).where(PhotoAsset.request_id == request.id))
+    quality = db.get(PhotoQuality, request.id)
+    old_path = None
     if existing:
         if existing.idempotency_key == idempotency_key and existing.content_hash == digest:
             return photo_out(existing)
-        raise HTTPException(
-            409, "Request already has a photo; replay with the original key and bytes"
-        )
+        if (existing.idempotency_key == idempotency_key or not quality
+                or quality.status not in ("retake_recommended", "uncertain", "failed")):
+            raise HTTPException(409, "Replay original key and bytes, or use a new key for an optional retake")
+        old_path = private_path(existing.storage_key)
     asset_id = uuid4()
     path = private_path(f"{asset_id.hex}.jpg")
     created_file = False
@@ -255,21 +261,34 @@ def upload_photo(
             created_file = True
             output.write(encoded)
         path.chmod(0o600)
-        upload = clinical.PhotoUpload(patient_id=credential.patient_id, source="patient_app")
-        db.add(upload)
-        db.flush()
-        photo = PhotoAsset(
-            id=str(asset_id),
-            request_id=request.id,
-            patient_id=credential.patient_id,
-            upload_id=upload.id,
-            idempotency_key=idempotency_key,
-            content_hash=digest,
-            storage_key=path.name,
-            mime_type=mime,
-            size_bytes=len(encoded),
-        )
+        if existing:
+            photo = existing
+            photo.idempotency_key = idempotency_key
+            photo.content_hash = digest
+            photo.storage_key = path.name
+            photo.mime_type = mime
+            photo.size_bytes = len(encoded)
+        else:
+            upload = clinical.PhotoUpload(patient_id=credential.patient_id, source="patient_app")
+            db.add(upload)
+            db.flush()
+            photo = PhotoAsset(
+                id=str(asset_id),
+                request_id=request.id,
+                patient_id=credential.patient_id,
+                upload_id=upload.id,
+                idempotency_key=idempotency_key,
+                content_hash=digest,
+                storage_key=path.name,
+                mime_type=mime,
+                size_bytes=len(encoded),
+            )
         db.add(photo)
+        if quality is None:
+            quality = PhotoQuality(request_id=request.id, content_hash=digest)
+            db.add(quality)
+        quality.content_hash, quality.status, quality.issues = digest, "checking", []
+        quality.updated_at = utcnow()
         request.status = "completed"
         request.completed_at = utcnow()
         db.commit()
@@ -278,6 +297,9 @@ def upload_photo(
         if created_file:
             path.unlink(missing_ok=True)
         raise
+    if old_path:
+        old_path.unlink(missing_ok=True)
+    background.add_task(check_quality, request.id, digest, db.get_bind())
     return photo_out(photo)
 
 

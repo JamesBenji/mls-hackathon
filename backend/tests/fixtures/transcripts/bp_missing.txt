@@ -1,0 +1,11 @@
+Agent: Hello, this is Guardian, an AI assistant calling on behalf of Dr. Lee. Am I speaking with Maria Gomez?
+Patient: Yes, speaking.
+Agent: On our last call your blood pressure was 158 over 95. Did you take your blood pressure today?
+Patient: No, I haven't measured it yet today.
+Agent: No problem. Please measure it after our call, and I will call you back in 15 minutes to record it. Did you check your blood sugar?
+Patient: Yes, this morning it was 126.
+Agent: Did you take your medication today, and at what time?
+Patient: Yes, at 8 o'clock with breakfast.
+Agent: Are you having any chest pain, trouble breathing, or severe dizziness right now?
+Patient: No, none of that.
+Agent: Thank you, Maria. I will call you back in 15 minutes for your blood pressure.
