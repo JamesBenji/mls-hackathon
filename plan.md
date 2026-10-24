@@ -19,7 +19,7 @@ is ever auto-applied to a patient.
 
 | Layer | Choice |
 |-------|--------|
-| Clinical brain | **Gemma 4 31B** (`gemma-4-31b-it`) via the **Google Generative Language API** (cloud, API key) |
+| Clinical brain | **Gemma 4 26B A4B** (`gemma-4-26b-a4b-it`, MoE — fast + reliable) via the **Google Generative Language API** (cloud, API key). The 31B (`gemma-4-31b-it`) exists but was 500ing server-side as of 2026-10-24; switch via `GEMMA_MODEL` when it stabilizes. |
 | Voice calls | **ElevenLabs** Conversational AI (agent + imported Twilio number) |
 | SMS | **Twilio** (outbound send + inbound webhooks with signature validation) |
 | Backend | **FastAPI** + SQLAlchemy 2 + Pydantic v2, APScheduler (in-process jobs) |
@@ -33,8 +33,11 @@ is ever auto-applied to a patient.
 backend/app/
   adapters/            outbound integrations, no business logic
     gemma_client.py    Google Gen-Language API: chat / chat_json (schema in
-                       prompt + one validation retry), concurrency gate,
-                       health probes. Same contract the old Ollama client had.
+                       prompt + one validation retry), bounded 5xx retries
+                       (the hosted Gemma models 500 intermittently under
+                       load — identical payloads succeed on re-roll),
+                       concurrency gate, health probes. Same contract the
+                       old Ollama client had.
     elevenlabs.py      calls + agent provisioning; twilio_sms.py: SMS
   services/            the business logic
     clinical.py        question plans, report extraction, triage, call-job
@@ -80,11 +83,15 @@ dashboard/             Flutter doctor dashboard
 
 ## In progress / next
 
-- ⏳ Verify the exact `gemma-4-31b-it` model id against the live API
-  (`curl "https://generativelanguage.googleapis.com/v1beta/models?key=$GOOGLE_API_KEY"`)
-  and pin it in `.env` / config if it differs.
-- ⏳ Full test suite needs a run after the Ollama→Gemma-API swap
-  (`cd backend && pytest`).
+- ✅ Model id verified against the live API (2026-10-24): `gemma-4-26b-a4b-it`
+  is fast and reliable; the 31B 500s on Google's side. Live smoke test:
+  `cd backend && .venv/Scripts/python.exe -m scripts.smoke_gemma`
+- ✅ Live end-to-end verified (2026-10-24): smoke test triages a
+  hypertensive-emergency transcript to `emergency / ambulance` via the
+  cloud API. The API also returns transient 500s under load (fast
+  failures); the client now retries 5xx up to 2× inside the caller's
+  timeout. Diagnosis matrix: `scripts/debug_triage_500.py`.
+- ✅ Full test suite green after the Ollama→Gemma-API swap (639 passed).
 - ☐ Real ElevenLabs agent end-to-end over the phone (provisioning script:
   `backend/scripts/provision_elevenlabs.py`).
 - ☐ Deploy (any container host + managed Postgres; no GPU needed anymore —
