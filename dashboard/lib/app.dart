@@ -1,3 +1,5 @@
+// Legacy clinical workspace library, retained for its existing integrations and
+// tests. Not an entrypoint and not imported by the Medicall follow-up app.
 import 'package:flutter/material.dart';
 import 'package:forui/forui.dart';
 import 'package:http/http.dart' as http;
