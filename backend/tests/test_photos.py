@@ -32,6 +32,10 @@ sqlite3.register_adapter(list, json.dumps)
 
 @pytest.fixture()
 def api(tmp_path, monkeypatch):
+    from app.photos import quality
+    async def technical_quality(_images):
+        return quality.QualityResult(status="clear_enough")
+    monkeypatch.setattr(quality, "assess_photo_quality", technical_quality)
     engine = create_engine(
         f"sqlite:///{tmp_path / 'test.db'}", connect_args={"check_same_thread": False}
     )
@@ -93,6 +97,28 @@ def upload(client, tokens, request_id, content=None, mime="image/png", role="pat
         headers={**tokens[role], "Idempotency-Key": "upload-1"},
         files={"file": ("../../unsafe.png", content, mime)},
     )
+
+
+def test_advisory_quality_and_optional_retake(api, monkeypatch):
+    from app.photos import quality
+    async def uncertain(_images):
+        return quality.QualityResult(status="uncertain", issues=["blur"])
+    monkeypatch.setattr(quality, "assess_photo_quality", uncertain)
+    client, tokens, _engine = api
+    request_id = create(client, tokens).json()["id"]
+    original = upload(client, tokens, request_id)
+    assert original.status_code == 201
+    request = client.get(f"/me/photo-requests/{request_id}", headers=tokens["patient"]).json()
+    assert request["quality"]["status"] == "uncertain"
+    assert request["quality"]["technical_feedback"] == ["blur"]
+    assert client.get(original.json()["content_url"], headers=tokens["patient"]).status_code == 200
+    buffer = io.BytesIO()
+    Image.new("RGB", (20, 20), "blue").save(buffer, format="PNG")
+    retake = client.post(f"/me/photo-requests/{request_id}/photos",
+                         headers={**tokens["patient"], "Idempotency-Key": "retake-2"},
+                         files={"file": ("retake.png", buffer.getvalue(), "image/png")})
+    assert retake.status_code == 201
+    assert retake.json()["request_id"] == request_id
 
 
 def test_pairing_upload_review_and_idempotent_retries(api):

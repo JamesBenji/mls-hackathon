@@ -1,0 +1,14 @@
+Agent: Hello, this is Guardian, an AI assistant calling on behalf of Dr. Lee. Am I speaking with Maria Gomez?
+Patient: Yes, this is Maria.
+Agent: Thank you, Maria. Did you take your blood pressure today? What was the reading?
+Patient: Yes, I took it this morning. It was 140 over 90.
+Agent: Thank you. Did you check your blood sugar? What was the reading?
+Patient: Yes, it was 130.
+Agent: Did you take your medication today, and at what time?
+Patient: Yes, I took my pills at 8 this morning.
+Agent: Have you noticed any side effects since starting Lisinopril?
+Patient: No, nothing really. Maybe I am a little tired.
+Agent: Are you having any chest pain, trouble breathing, or severe dizziness right now?
+Patient: No, I feel okay.
+Agent: Thank you, Maria. I will pass this on to Dr. Lee. Goodbye.
+Patient: Bye.
