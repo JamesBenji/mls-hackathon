@@ -199,10 +199,10 @@ sms_log
 
 ```
 ┌────────────────┐        ┌──────────────────────────────┐
-│ React Dashboard │◄──────►│ FastAPI backend (DigitalOcean) │
-│ (doctor)        │  REST  │  - patient/vitals/report CRUD  │
-└────────────────┘   /WS  │  - call orchestration          │
-                          │  - report generation           │
+│ Flutter app     │◄──────►│ FastAPI backend (DigitalOcean) │
+│ (doctor, web +  │  REST  │  - patient/vitals/report CRUD  │
+│  mobile)        │ (poll) │  - call orchestration          │
+└────────────────┘        │  - report generation           │
                           │  - scheduler (callbacks, SMS)   │
                           └───┬─────────┬─────────┬─────────┘
                               │         │         │
@@ -234,7 +234,7 @@ sms_log
 | **Clinical brain** | MedGemma on a DigitalOcean GPU droplet (Ollama) — **hybrid**: question plan + post-call report/extraction |
 | **SMS** | Twilio |
 | **Backend** | Python / FastAPI (SQLAlchemy) |
-| **Frontend** | React (Vite) |
+| **Frontend** | Flutter (web + mobile, single codebase) |
 | **Database** | Postgres (DigitalOcean managed) |
 | **Email + PDF** | Real email (SendGrid/Resend) + real generated PDF |
 | **Scheduler** | APScheduler / background worker (callbacks, SMS reminders) |
@@ -250,7 +250,7 @@ sms_log
 2. **DO GPU droplet** + MedGemma via Ollama; verify curl completion (fallback: base `gemma2`).
 3. **FastAPI skeleton** + SQLAlchemy models + Alembic migrations for the data model above.
 4. **Seed data**: 4–5 fake patients across categories, with history + past reports (so the agent has memory to use in the demo).
-5. **React (Vite) skeleton** + routing + API client.
+5. **Flutter skeleton** (web + mobile) + routing + REST API client (polling for live updates).
 
 ### Milestone 1 — Dashboard (read-only)
 6. Patient list + categories + risk badges.
@@ -345,6 +345,6 @@ POST   /sms/send                 reminder/tip/callback (Twilio)
 - **SMS:** Twilio (real)
 - **DB:** Postgres on DigitalOcean (managed)
 - **Backend:** Python / FastAPI
-- **Frontend:** React (Vite)
+- **Frontend:** Flutter (web + mobile, single codebase; REST + polling)
 - **Email + PDF:** Real email + real generated PDF
 - **Phase 1 = phone-first core; Phase 2 = computer vision (X-ray recovery)**
