@@ -647,11 +647,14 @@ async def analyze_transcript(db: Session, patient_id: int, text: str, *,
     errors: list[str] = []
 
     # (1) report draft
-    gen, report_error = None, None
+    gen, report_error, report_error_detail = None, None, None
     try:
         gen = await clinical.generate_report_detailed(text, ctx, reports)
     except Exception as exc:
         report_error = _err(exc)
+        # The doctor-facing summary carries the reason; logs and the
+        # machine-readable error field keep only the safe type name.
+        report_error_detail = str(exc)
         errors.append(f"report generation failed: {report_error}")
         log.warning("report generation failed for patient %s: %s", patient_id, report_error)
     draft = gen.draft if gen is not None else None
@@ -663,7 +666,8 @@ async def analyze_transcript(db: Session, patient_id: int, text: str, *,
                                    status="partial" if draft is None else "ok")
         if draft is None:
             report.error = errors[0]
-            report.summary = f"[report generation failed: {report_error}] Transcript saved."
+            report.summary = (f"[report generation failed: {report_error_detail}] "
+                               "Transcript saved.")
         else:
             report.summary = draft.summary
             report.soap = draft.soap.model_dump()

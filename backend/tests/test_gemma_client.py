@@ -57,6 +57,12 @@ def _err(status: int, message: str) -> httpx.Response:
     return httpx.Response(status, json={"error": {"message": message, "code": status}})
 
 
+@pytest.fixture(autouse=True)
+def _no_5xx_backoff(monkeypatch):
+    """The 5xx retry backoff would make the failure tests sleep; zero it."""
+    monkeypatch.setattr(gemma_client, "_RETRY_BACKOFF_S", 0.0)
+
+
 # --- request shape ---------------------------------------------------------------
 
 async def test_chat_hits_generatecontent_with_the_key_header(fake_gemma):
@@ -118,7 +124,7 @@ async def test_schema_appends_a_json_instruction_to_the_last_user_turn(fake_gemm
 
     text = fake_gemma.chat_requests[-1]["contents"][-1]["parts"][0]["text"]
     assert "valid JSON" in text
-    assert json.dumps(schema) in text
+    assert json.dumps(schema, separators=(",", ":")) in text  # compact, as sent
     # the caller's messages are never mutated
     assert "valid JSON" not in MSGS[-1]["content"]
 
@@ -260,6 +266,45 @@ async def test_error_messages_never_contain_the_prompt(status):
     assert "SECRET-PROMPT-7731" not in str(info.value)
 
 
+# --- 5xx retries -------------------------------------------------------------------
+
+async def test_transient_5xx_is_retried_and_succeeds():
+    """The hosted Gemma models 500 intermittently under load (fast
+    failures, identical payload succeeds on the next attempt), so the
+    client re-rolls 5xx responses instead of surfacing them."""
+    calls = {"n": 0}
+
+    def flaky(request):
+        calls["n"] += 1
+        return (_err(500, "Internal error encountered") if calls["n"] == 1
+                else _ok("recovered"))
+
+    seen = _install(flaky)
+
+    out = await gemma_client.chat(MODEL, MSGS)
+
+    assert out == "recovered"
+    assert len(seen) == 2  # one failure, one retry
+
+
+async def test_persistent_5xx_exhausts_retries_and_is_unavailable():
+    seen = _install(lambda request: _err(500, "Internal error encountered"))
+
+    with pytest.raises(ModelUnavailable):
+        await gemma_client.chat(MODEL, MSGS)
+
+    assert len(seen) == gemma_client._5XX_RETRIES + 1
+
+
+async def test_4xx_is_never_retried():
+    seen = _install(lambda request: _err(429, "rate limited"))
+
+    with pytest.raises(ModelUnavailable):
+        await gemma_client.chat(MODEL, MSGS)
+
+    assert len(seen) == 1  # deterministic -> fail fast, no re-rolls
+
+
 # --- structured output ------------------------------------------------------------
 
 async def test_chat_json_valid_first_try(fake_gemma):
@@ -279,8 +324,8 @@ async def test_chat_json_passes_overrides_through(fake_gemma):
 
     await gemma_client.chat_json(MODEL, MSGS, TriageResult, timeout=3, temperature=0.4)
 
-    config = fake_gemma.chat_requests[0]["generationConfig"]
-    assert config == {"temperature": 0.4, "maxOutputTokens": 3} or config["temperature"] == 0.4
+    # temperature flows into generationConfig; timeout is the HTTP deadline
+    assert fake_gemma.chat_requests[0]["generationConfig"] == {"temperature": 0.4}
 
 
 async def test_chat_json_retries_once_with_the_validation_error(fake_gemma):
@@ -293,7 +338,9 @@ async def test_chat_json_retries_once_with_the_validation_error(fake_gemma):
     assert out.urgency == "monitor"
     assert len(fake_gemma.chat_requests) == 2
     first, retry = fake_gemma.chat_requests
-    assert first["contents"][-1]["parts"][0]["text"].startswith("Classify this call.")
+    # the system prompt is folded into the first user turn, so the original
+    # question is inside it, not at the start
+    assert "Classify this call." in first["contents"][-1]["parts"][0]["text"]
     retry_texts = [p["text"] for p in retry["contents"][-1]["parts"] if "text" in p]
     assert any("did not match the required JSON schema" in t for t in retry_texts)
 
@@ -323,14 +370,15 @@ async def test_chat_json_invalid_twice_raises_output_invalid(fake_gemma):
     "```json\n{}\n```",
     "```\n{}\n```",
     "Here you go:\n```json\n{}\n```\nDone.",
+    "Sure, here is the triage: {} — hope that helps!",
 ])
-async def test_chat_json_accepts_fenced_json(fake_gemma, wrap):
+async def test_chat_json_accepts_fenced_and_prose_wrapped_json(fake_gemma, wrap):
     fake_gemma.queue_chat(wrap.replace("{}", json.dumps(VALID_TRIAGE)))
 
     out = await gemma_client.chat_json(MODEL, MSGS, TriageResult)
 
     assert out.urgency == "monitor"
-    assert len(fake_gemma.chat_requests) == 1
+    assert len(fake_gemma.chat_requests) == 1  # parsed on the first try, no retry
 
 
 async def test_chat_json_propagates_unavailable_without_retry(fake_gemma):
@@ -348,7 +396,8 @@ async def test_chat_json_unavailable_during_retry_propagates(fake_gemma):
     with pytest.raises(ModelUnavailable):
         await gemma_client.chat_json(MODEL, MSGS, TriageResult)
 
-    assert len(fake_gemma.chat_requests) == 1
+    # both requests were seen; the retry's transport error propagated
+    assert len(fake_gemma.chat_requests) == 2
 
 
 async def test_chat_json_keeps_images_on_the_retry_conversation(fake_gemma):
@@ -360,8 +409,10 @@ async def test_chat_json_keeps_images_on_the_retry_conversation(fake_gemma):
 
     assert out.urgency == "monitor"
     first, retry = fake_gemma.chat_requests
-    assert any("inline_data" in p for p in first["contents"][-1]["parts"])
-    assert any("inline_data" in p for p in retry["contents"][-1]["parts"])
+    # images ride their own user turn, which is no longer last once the
+    # retry instruction is appended - so scan every turn
+    assert any("inline_data" in p for c in first["contents"] for p in c["parts"])
+    assert any("inline_data" in p for c in retry["contents"] for p in c["parts"])
 
 
 async def test_chat_json_rejects_explicit_schema(fake_gemma):

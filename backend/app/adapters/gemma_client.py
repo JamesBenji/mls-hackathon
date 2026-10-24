@@ -4,8 +4,9 @@
 CONTRACT (other modules rely on it):
 
     class ModelError(Exception)                 base
-    class ModelUnavailable(ModelError)          connection error, timeout, HTTP 5xx,
-                                                auth failure, rate limit, model not
+    class ModelUnavailable(ModelError)          connection error, timeout, HTTP 5xx
+                                                (after bounded retries), auth
+                                                failure, rate limit, model not
                                                 found (404) -> callers fall back
     class ModelOutputInvalid(ModelError)        JSON / Pydantic validation still
                                                 failing after the single retry
@@ -41,6 +42,13 @@ cannot leak into logs). trust_env=False: never route patient data through
 an HTTP(S)_PROXY from the environment. Settings are read at call time
 (tests monkeypatch the singleton). Exception messages and logs never
 contain prompts or model output.
+
+The hosted Gemma models answer 500 "Internal error encountered"
+intermittently under load (observed 2026-10-24: an identical payload
+succeeded 2 of 3 times, and the failures returned in under a second), so
+5xx responses are retried up to _5XX_RETRIES times with a short backoff,
+inside the caller's timeout budget. 4xx are deterministic (bad key,
+unknown model, bad request body) and fail immediately.
 """
 from __future__ import annotations
 
@@ -63,6 +71,8 @@ log = logging.getLogger(__name__)
 META_TIMEOUT_S = 5.0  # GET /models
 PROBE_TIMEOUT_S = 20.0  # latency probe for /health/models
 PROBE_NUM_PREDICT = 8
+_5XX_RETRIES = 2  # extra attempts after a 5xx response before giving up
+_RETRY_BACKOFF_S = 1.0  # pause between 5xx attempts (tests zero this)
 _PROBE_MESSAGES = [{"role": "user", "content": "Reply with the single word: ok"}]
 _DETAIL_MAX = 200  # chars of an API error body kept in exception messages
 _RETRY_ECHO_MAX = 8000  # chars of an invalid reply echoed back on the retry
@@ -153,10 +163,11 @@ def _headers() -> dict[str, str]:
 
 async def _request(method: str, path: str, *, timeout: float,
                    payload: dict | None = None, model: str | None = None) -> dict:
-    """One HTTP round trip to the API with the error mapping applied.
+    """One logical request to the API with the error mapping applied.
 
     `timeout` is also enforced as an asyncio deadline: httpx timeouts are
-    per read, and injected transports (tests) ignore them entirely.
+    per read, and injected transports (tests) ignore them entirely. The
+    deadline spans all 5xx retries, so a caller's budget is never exceeded.
     """
     what = f"{method} {path}" + (f" model={model!r}" if model else "")
     try:
@@ -167,6 +178,14 @@ async def _request(method: str, path: str, *, timeout: float,
                                          timeout=timeout, trust_env=False) as client:
                 resp = await client.request(method, path, json=payload,
                                             headers=_headers())
+                for retry in range(1, _5XX_RETRIES + 1):
+                    if resp.status_code < 500:
+                        break
+                    log.warning("gemma api %s: HTTP %d, retrying (%d/%d)",
+                                what, resp.status_code, retry, _5XX_RETRIES)
+                    await asyncio.sleep(_RETRY_BACKOFF_S)
+                    resp = await client.request(method, path, json=payload,
+                                                headers=_headers())
     except (TimeoutError, httpx.TimeoutException) as exc:
         raise ModelUnavailable(f"Gemma API timed out after {timeout:g}s ({what})") from exc
     except (httpx.TransportError, httpx.InvalidURL) as exc:
@@ -379,6 +398,40 @@ def _strip_fence(text: str) -> str:
     return match.group(1) if match else text
 
 
+def _extract_json(text: str) -> str:
+    """The JSON payload of a reply. Gemma cannot be grammar-constrained on
+    this API, so the object may arrive fenced or wrapped in prose: take a
+    whole-reply fence, else the first balanced {...} (string-aware), else
+    the raw text (the caller's validation error names the problem)."""
+    fenced = _strip_fence(text)
+    if fenced is not text:
+        return fenced
+    start = fenced.find("{")
+    if start < 0:
+        return text
+    depth = 0
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(fenced[start:], start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return fenced[start:i + 1]
+    return text
+
+
 def _validation_problems(exc: ValidationError) -> list[str]:
     """Compact "field: message" lines. Input values are left out so model
     output (and the patient text it may echo) never lands in logs/messages."""
@@ -424,7 +477,7 @@ async def chat_json(model: str, messages: list[dict], schema_model: type[M], **k
 
     reply = await chat(model, conversation, schema=schema, **kw)
     try:
-        return schema_model.model_validate_json(_strip_fence(reply))
+        return schema_model.model_validate_json(_extract_json(reply))
     except ValidationError as exc:
         problems = _validation_problems(exc)
     log.warning("%s from %s failed validation, retrying once: %s",
@@ -439,7 +492,7 @@ async def chat_json(model: str, messages: list[dict], schema_model: type[M], **k
     ]
     reply = await chat(model, retry, schema=schema, **kw)
     try:
-        return schema_model.model_validate_json(_strip_fence(reply))
+        return schema_model.model_validate_json(_extract_json(reply))
     except ValidationError as exc:
         problems = _validation_problems(exc)
         log.warning("%s from %s still invalid after one retry: %s",

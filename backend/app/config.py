@@ -32,7 +32,6 @@ class Settings(BaseSettings):
     photo_credential_days: int = 90
 
     public_base_url: str = "http://localhost:8000"
-    public_host: str = ""  # e.g. 203-0-113-10.sslip.io (Caddy, docs only)
     timezone: str = "Europe/Berlin"
     # When true, ElevenLabs/Twilio adapters log instead of calling out.
     # Adapters also fall back to mock if their credentials are missing.
@@ -52,7 +51,9 @@ class Settings(BaseSettings):
     gemma_api_key: str | None = Field(
         None, validation_alias=_env("GOOGLE_API_KEY", "GEMMA_API_KEY")
     )
-    gemma_model: str = "gemma-4-31b-it"
+    # 26B A4B (MoE): fast + reliable; the 31B was 500ing server-side as of
+    # 2026-10-24. Switch back with GEMMA_MODEL=gemma-4-31b-it once stable.
+    gemma_model: str = "gemma-4-26b-a4b-it"
     gemma_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     clinical_pipeline: str = "two_stage"  # two_stage | single
     model_timeout_s: float = 120.0
