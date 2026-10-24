@@ -38,10 +38,17 @@ services:
       DOCTOR_ALERT_EMAIL: ${DOCTOR_ALERT_EMAIL:-}
       PHOTO_STORAGE_DIR: /var/lib/guardian/private-photos
       PHOTO_PUSH_ENABLED: ${PHOTO_PUSH_ENABLED:-false}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
     volumes:
       - private-photos:/var/lib/guardian/private-photos
       # app/services/pdf.py resolves ../../reports_out relative to that module.
       - pdf-reports:/app/app/reports_out
+      - type: bind
+        source: ${FIREBASE_CREDENTIALS_HOST_PATH:-/opt/medicall/secrets/firebase-service-account.json}
+        target: /run/secrets/firebase-service-account.json
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       - default
       - database
